@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from blind.errors import UsageError, VerificationError
+from blind.store import Store
 
 PINNED_RUNNER_IMAGE = (
     "ghcr.io/astral-sh/uv@"
@@ -27,6 +28,8 @@ _PLATFORM_PATTERN = re.compile(r"^linux/(?:amd64|arm64)$")
 _UNSAFE_DIRECT_MODE = "direct"
 _UNSAFE_DIRECT_OPT_IN = "BLIND_UNSAFE_ALLOW_DIRECT_STAGE_RUNNER"
 _CONTAINER_TMP = PurePosixPath("/").joinpath("tmp").as_posix()
+_PRIVATE_STDIN = PurePosixPath("/").joinpath("dev", "stdin").as_posix()
+_MAX_PRIVATE_INPUT_BYTES = 64 * 1024 * 1024
 # These paths exist only inside the bounded, noexec container tmpfs.
 _SAFE_ENV = {
     "HOME": _CONTAINER_TMP,
@@ -184,8 +187,9 @@ class ContainerSandbox:
         if venv_dir.exists() and (not venv_dir.is_dir() or any(venv_dir.iterdir())):
             raise VerificationError("Application virtual environment must be created from empty state")
         venv_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         cache_dir = _safe_mount_source(cache_dir)
+        if not cache_dir.is_dir():
+            raise VerificationError("Application build cache must be a private directory")
 
         name = _container_name("build")
         argv = [
@@ -216,8 +220,9 @@ class ContainerSandbox:
         output_paths: list[Path],
         output_dir_argument: Path | None,
         limits: SandboxLimits,
+        private_input: tuple[str, bytes] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """Run one stage with only staged inputs and one writable output mount."""
+        """Run one stage with staged files and at most one pipe-only private input."""
         self.ensure_ready(pull=False)
         bundle_root = _safe_mount_source(bundle_root)
         if Path(stage_name).name != stage_name:
@@ -235,6 +240,20 @@ class ContainerSandbox:
             out_dir.mkdir(mode=0o700)
 
             rewritten = list(args)
+            stdin_payload: bytes | None = None
+            if private_input is not None:
+                marker, payload = private_input
+                if not marker or marker.startswith("-") or rewritten.count(marker) != 1:
+                    raise VerificationError(
+                        "A private stage input must map to exactly one declared argument"
+                    )
+                if not isinstance(payload, bytes) or not payload:
+                    raise VerificationError("A private stage input must be non-empty bytes")
+                if len(payload) > _MAX_PRIVATE_INPUT_BYTES:
+                    raise VerificationError("Private stage input exceeds the 64 MiB limit")
+                rewritten = [_PRIVATE_STDIN if value == marker else value for value in rewritten]
+                stdin_payload = payload
+
             for index, source in enumerate(input_paths):
                 original = Path(source)
                 source = _safe_input_file(original)
@@ -290,6 +309,7 @@ class ContainerSandbox:
             env_argv = [item for key, value in env.items() for item in ("-e", f"{key}={value}")]
             argv = [
                 *self._base_argv(name=name, network="none", limits=limits),
+                *(["--interactive"] if stdin_payload is not None else []),
                 *mounts,
                 *env_argv,
                 "-w", "/bundle",
@@ -298,7 +318,15 @@ class ContainerSandbox:
                 "uv", "--project", "/bundle/env", "run", "--frozen", "--offline", "--no-sync",
                 "python", stage_path, *rewritten,
             ]
-            proc = self._execute(argv, name=name, timeout=limits.wall_seconds + 30)
+            if stdin_payload is None:
+                proc = self._execute(argv, name=name, timeout=limits.wall_seconds + 30)
+            else:
+                proc = self._execute(
+                    argv,
+                    name=name,
+                    timeout=limits.wall_seconds + 30,
+                    stdin_payload=stdin_payload,
+                )
             if proc.returncode == 0:
                 for staged, destination in zip(staged_outputs, output_paths, strict=True):
                     if not staged.is_file() or staged.is_symlink():
@@ -332,11 +360,20 @@ class ContainerSandbox:
         return argv
 
     def _execute(
-        self, argv: list[str], *, name: str, timeout: int
+        self, argv: list[str], *, name: str, timeout: int, stdin_payload: bytes | None = None
     ) -> subprocess.CompletedProcess[str]:
         try:
+            io_args = (
+                {"input": stdin_payload}
+                if stdin_payload is not None
+                else {"stdin": subprocess.DEVNULL}
+            )
             result = subprocess.run(  # nosec B603
-                argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout
+                argv,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+                **io_args,
             )
             return subprocess.CompletedProcess(result.args, result.returncode, "", "")
         except subprocess.TimeoutExpired as exc:
@@ -366,14 +403,7 @@ def _container_uid_gid() -> tuple[int, int]:
 
 
 def _private_tmp_root() -> str:
-    home = Path(os.environ.get("BLIND_HOME", str(Path.home() / ".blind"))).absolute()
-    root = home / "tmp"
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if root.is_symlink():
-        raise VerificationError("Refusing a symlinked BLIND_HOME temporary directory")
-    if os.name == "posix":
-        os.chmod(root, 0o700)
-    return str(root)
+    return str(Store().temporary_root())
 
 
 def _safe_mount_source(path: Path) -> Path:

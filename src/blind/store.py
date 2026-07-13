@@ -1,8 +1,9 @@
 """~/.blind local state: config.yml, auth tokens, applications, keys, results.
 
-Everything the CLI persists lives under a single root (default ``~/.blind``,
-overridable with ``$BLIND_HOME`` — the tests point it at a temp dir). Restrictive
+Everything the CLI persists lives under the fixed ``~/.blind`` root. Restrictive
 permissions are enforced: the root is 0700, token and fallback-key files 0600.
+Tests inject a temporary root directly rather than accepting a path from the
+process environment.
 
 Secret keys live in the OS keychain via ``keyring``; the on-disk tree holds only
 a *reference*. Keyring failure is fatal by default. A plaintext 0600 backend is
@@ -78,11 +79,8 @@ def enforce_https(url: str) -> str:
 
 
 def blind_home() -> Path:
-    configured = os.environ.get("BLIND_HOME")
-    path = Path(configured).expanduser() if configured else Path.home() / ".blind"
-    if not path.is_absolute():
-        raise UsageError("BLIND_HOME must be an absolute path")
-    return path.absolute()
+    """Return the one production state root; callers cannot redirect secrets."""
+    return (Path.home() / ".blind").absolute()
 
 
 def validate_component(value: str | int, label: str) -> str:
@@ -152,6 +150,20 @@ def _atomic_write(path: Path, data: str | bytes, mode: int = 0o600) -> Path:
         temp_path.unlink(missing_ok=True)
 
 
+def _validate_private_file_info(
+    info: os.stat_result, path: Path, label: str, *, max_bytes: int
+) -> None:
+    if not stat.S_ISREG(info.st_mode):
+        raise VerificationError(f"Refusing non-regular {label}: {path}")
+    if info.st_size > max_bytes:
+        raise VerificationError(f"Refusing oversized {label}: {path}")
+    if os.name == "posix":
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise VerificationError(f"{label.capitalize()} permissions are too open: {path}")
+        if info.st_uid != os.geteuid():
+            raise VerificationError(f"{label.capitalize()} is not owned by the current user: {path}")
+
+
 def _read_private_text(path: Path, label: str, *, max_bytes: int) -> str | None:
     if path.is_symlink():
         raise VerificationError(f"Refusing symlinked {label}: {path}")
@@ -164,15 +176,7 @@ def _read_private_text(path: Path, label: str, *, max_bytes: int) -> str | None:
         raise VerificationError(f"Could not securely open {label}: {path}") from exc
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise VerificationError(f"Refusing non-regular {label}: {path}")
-        if info.st_size > max_bytes:
-            raise VerificationError(f"Refusing oversized {label}: {path}")
-        if os.name == "posix":
-            if stat.S_IMODE(info.st_mode) & 0o077:
-                raise VerificationError(f"{label.capitalize()} permissions are too open: {path}")
-            if info.st_uid != os.geteuid():
-                raise VerificationError(f"{label.capitalize()} is not owned by the current user: {path}")
+        _validate_private_file_info(info, path, label, max_bytes=max_bytes)
         with os.fdopen(fd, "r", encoding="utf-8", closefd=True) as handle:
             fd = -1
             try:
@@ -196,14 +200,14 @@ class Store:
             raise UsageError("Local state directory must be an absolute path")
         self.home = selected.absolute()
         if self.home.exists() and self.home.is_symlink():
-            raise VerificationError("BLIND_HOME may not be a symlink")
+            raise VerificationError("The private state root may not be a symlink")
 
     def _path(self, *components: str) -> Path:
         candidate = self.home.joinpath(*components)
         root = self.home.resolve(strict=False)
         resolved = candidate.resolve(strict=False)
         if not resolved.is_relative_to(root):
-            raise VerificationError("Computed local-state path escapes BLIND_HOME")
+            raise VerificationError("Computed local-state path escapes the private state root")
         if candidate.exists() and candidate.is_symlink():
             raise VerificationError(f"Refusing symlinked local-state path: {candidate}")
         current = self.home
@@ -219,6 +223,17 @@ class Store:
         for sub in ("auth", "applications", "keys/projects", "cache/encoded",
                     "cache/encrypted", "cache/uv", "results", "simulations", "logs", "tmp"):
             _ensure_dir(self._path(*sub.split("/")), 0o700)
+
+    def temporary_root(self) -> Path:
+        """Return the private host scratch root after enforcing its layout."""
+        self.ensure_layout()
+        return self._path("tmp")
+
+    def uv_cache_dir(self, bundle_digest: str) -> Path:
+        """Return an isolated, private build cache for one verified bundle digest."""
+        digest = validate_digest(bundle_digest, "bundle digest")
+        self.ensure_layout()
+        return _ensure_dir(self._path("cache", "uv", digest), 0o700)
 
     @property
     def config_path(self) -> Path:
@@ -461,13 +476,17 @@ class Store:
         return removed
 
     # -- perms audit (doctor) ----------------------------------------------
+    @staticmethod
+    def _permission_mode(path: Path) -> int:
+        return stat.S_IMODE(path.stat(follow_symlinks=False).st_mode)
+
     def perms_report(self) -> dict:
         report = {"home": None, "auth": None, "world_readable": []}
         if self.home.exists():
-            report["home"] = oct(stat.S_IMODE(self.home.stat().st_mode))
+            report["home"] = oct(self._permission_mode(self.home))
         auth = self.home / "auth"
         if auth.exists():
-            report["auth"] = oct(stat.S_IMODE(auth.stat().st_mode))
+            report["auth"] = oct(self._permission_mode(auth))
         # Flag any token/key file that is group- or world-readable.
         for pattern in (
             "config.yml", "auth/*.token", "keys/projects/*/private.key",
@@ -477,7 +496,7 @@ class Store:
                 if f.is_symlink() or not f.is_file():
                     report["world_readable"].append(str(f))
                     continue
-                mode = stat.S_IMODE(f.stat().st_mode)
+                mode = self._permission_mode(f)
                 if mode & 0o077:
                     report["world_readable"].append(str(f))
         return report

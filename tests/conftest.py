@@ -1,7 +1,7 @@
 """Shared test fixtures.
 
 Every test runs with:
-  * BLIND_HOME pointed at a temp dir (no touching the real ~/.blind),
+  * the production home resolver injected with a temp dir (no real ~/.blind),
   * BLIND_SECRET_BACKEND=file (explicit deterministic test-only secret storage),
   * BLIND_STAGE_RUNNER=direct plus the named unsafe opt-in (fake stages run under
     the test interpreter, so the unit suite needs no container or TenSEAL),
@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+import blind.store as store_module
 from blind.hashing import canonical_bundle_digest
 from blind.runtime import bundle as bundle_mod
 from blind.store import Store
@@ -280,7 +281,7 @@ def _write_bundle_files(root: Path, name: str, length: int = 4,
 @pytest.fixture(autouse=True)
 def blind_env(tmp_path, monkeypatch):
     home = tmp_path / "dot-blind"
-    monkeypatch.setenv("BLIND_HOME", str(home))
+    monkeypatch.setattr(store_module, "blind_home", lambda: home)
     monkeypatch.setenv("BLIND_SECRET_BACKEND", "file")
     monkeypatch.setenv("BLIND_STAGE_RUNNER", "direct")
     monkeypatch.setenv("BLIND_UNSAFE_ALLOW_DIRECT_STAGE_RUNNER", "1")

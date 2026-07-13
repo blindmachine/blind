@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import json as _json
 import os
-import stat
 import sys
-from pathlib import Path
 
 import typer
 
@@ -48,52 +46,20 @@ RESOURCES = [
 _MAX_CREDENTIAL_BYTES = 16 * 1024
 
 
-def _read_secret_file(path: str, label: str) -> str:
-    credential = Path(path).expanduser().absolute()
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(credential, flags)
-    except OSError as exc:
-        raise UsageError(f"Could not securely open {label} file: {credential}") from exc
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise UsageError(f"{label} source must be a regular file")
-        if info.st_size > _MAX_CREDENTIAL_BYTES:
-            raise UsageError(f"{label} file is unexpectedly large")
-        if os.name == "posix" and stat.S_IMODE(info.st_mode) & 0o077:
-            raise UsageError(f"{label} file must not be group- or world-readable")
-        if os.name == "posix" and info.st_uid != os.geteuid():
-            raise UsageError(f"{label} file must be owned by the current user")
-        with os.fdopen(fd, "r", encoding="utf-8", closefd=True) as handle:
-            fd = -1
-            value = handle.read(_MAX_CREDENTIAL_BYTES + 1).strip()
-    finally:
-        if fd >= 0:
-            os.close(fd)
-    if not value:
-        raise UsageError(f"{label} file is empty")
+def _read_secret_stdin(label: str) -> str:
+    if sys.stdin.isatty():
+        value = typer.prompt(label, hide_input=True)
+    else:
+        value = sys.stdin.read(_MAX_CREDENTIAL_BYTES + 1)
+        if value.endswith("\n"):
+            value = value[:-1]
+            if value.endswith("\r"):
+                value = value[:-1]
+        if "\n" in value or "\r" in value:
+            raise UsageError(f"Invalid multiline {label} received on stdin")
+    if not value or len(value.encode("utf-8")) > _MAX_CREDENTIAL_BYTES:
+        raise UsageError(f"Invalid {label} received on stdin")
     return value
-
-
-def _read_secret_source(
-    *, file: str | None, stdin: bool, env_file: str, label: str
-) -> str | None:
-    file = file or os.environ.get(env_file)
-    if file and stdin:
-        raise UsageError(f"Choose only one {label} source: file or stdin")
-    if file:
-        return _read_secret_file(file, label)
-    if stdin:
-        value = (
-            typer.prompt(label, hide_input=True)
-            if sys.stdin.isatty()
-            else sys.stdin.read(_MAX_CREDENTIAL_BYTES + 1).strip()
-        )
-        if not value or len(value.encode("utf-8")) > _MAX_CREDENTIAL_BYTES:
-            raise UsageError(f"Invalid {label} received on stdin")
-        return value
-    return None
 
 
 @app.callback()
@@ -104,8 +70,6 @@ def main(
     color: str = typer.Option("auto", "--color", help="auto|on|off"),
     api: str = typer.Option(None, "--api", help="override platform base URL"),
     profile: str = typer.Option("default", "--profile"),
-    api_key_file: str = typer.Option(
-        None, "--api-key-file", help="read the invocation API key from a private file"),
     api_key_stdin: bool = typer.Option(
         False, "--api-key-stdin", help="read the invocation API key from stdin"),
     project: str = typer.Option(None, "--project", help="active project for scoped commands"),
@@ -117,10 +81,7 @@ def main(
     json = json or _env_flag("BLIND_JSON")
     quiet = quiet or _env_flag("BLIND_QUIET")
 
-    api_key = _read_secret_source(
-        file=api_key_file, stdin=api_key_stdin,
-        env_file="BLIND_API_KEY_FILE", label="API key",
-    )
+    api_key = _read_secret_stdin("API key") if api_key_stdin else None
     context = Context(json=json, quiet=quiet, color=color, api=api, profile=profile,
                       api_key=api_key, project=project, assume_yes=yes)
     ctx.obj = context
@@ -206,30 +167,25 @@ def _persist_login(context: Context, result) -> None:
 @app.command()
 def login(
     ctx: typer.Context,
-    api_key_file: str = typer.Option(
-        None, "--api-key-file", help="read an API key from a private file"),
     api_key_stdin: bool = typer.Option(False, "--api-key-stdin", help="read an API key from stdin"),
     email: str = typer.Option(None, "--email", help="account email (password login)"),
-    password_file: str = typer.Option(
-        None, "--password-file", help="read the account password from a private file"),
+    password_stdin: bool = typer.Option(
+        False, "--password-stdin", help="read the account password from stdin"),
 ):
-    """Obtain and store a token by hidden prompt, private file, or device flow."""
+    """Obtain and store a token by hidden prompt, stdin, or device flow."""
     context: Context = ctx.obj
     from blind.login import login_with_api_key, login_with_device, login_with_password
 
     client = context.client(token=None)
-    key = _read_secret_source(
-        file=api_key_file, stdin=api_key_stdin,
-        env_file="BLIND_API_KEY_FILE", label="API key",
-    ) or context.api_key
+    key = _read_secret_stdin("API key") if api_key_stdin else context.api_key
     if email and key:
         raise UsageError("Choose email/password login or API-key login, not both")
-    if password_file and not email:
-        raise UsageError("--password-file requires --email")
+    if password_stdin and not email:
+        raise UsageError("--password-stdin requires --email")
     if email:
         password = (
-            _read_secret_file(password_file, "Password")
-            if password_file
+            _read_secret_stdin("Password")
+            if password_stdin
             else _prompt_password(confirm=False)
         )
         result = login_with_password(client, email, password)
@@ -247,8 +203,8 @@ def login(
 def register(
     ctx: typer.Context,
     email: str = typer.Option(..., "--email", help="the email to register"),
-    password_file: str = typer.Option(
-        None, "--password-file", help="read the password from a private file"),
+    password_stdin: bool = typer.Option(
+        False, "--password-stdin", help="read the password from stdin"),
 ):
     """Create an account from the CLI and store its token — you never need the web
     app to sign up (that's only for people who prefer a browser). Afterward the CLI
@@ -256,7 +212,11 @@ def register(
     context: Context = ctx.obj
     from blind.login import register_with_password
 
-    pw = _read_secret_file(password_file, "Password") if password_file else _prompt_password(confirm=True)
+    pw = (
+        _read_secret_stdin("Password")
+        if password_stdin
+        else _prompt_password(confirm=True)
+    )
     result = register_with_password(context.client(token=None), email, pw)
     _persist_login(context, result)
 

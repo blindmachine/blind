@@ -26,12 +26,13 @@ other numbered stages; the server never uses it (see stages.py docstring).
 
 from __future__ import annotations
 
+import os
 import subprocess  # nosec B404
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from blind.errors import UsageError
+from blind.errors import UsageError, VerificationError
 from blind.hashing import sha256_file
 from blind.runtime.bundle import Bundle
 from blind.runtime.sandbox import (
@@ -59,16 +60,44 @@ def sort_inputs_by_digest(paths: list[str | Path]) -> list[Path]:
 
 
 def _direct_run(
-    bundle: Bundle, stage_file: Path, args: list[str], *, timeout: int
+    bundle: Bundle,
+    stage_file: Path,
+    args: list[str],
+    *,
+    timeout: int,
+    private_input: tuple[str, bytes] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Explicitly unsafe test/development seam; never selected implicitly."""
-    return subprocess.run(  # nosec B603
-        [sys.executable, str(stage_file), *args],
+    if private_input is None:
+        return subprocess.run(  # nosec B603
+            [sys.executable, str(stage_file), *args],
+            cwd=str(bundle.root),
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            text=True,
+            env=scrubbed_direct_env(bundle.root),
+        )
+
+    marker, payload = private_input
+    if os.name == "nt":
+        raise VerificationError("Pipe-only private inputs require the container sandbox on Windows")
+    if not marker or marker.startswith("-") or args.count(marker) != 1 or not payload:
+        raise VerificationError("Invalid pipe-only private stage input")
+    rewritten = ["/dev/stdin" if value == marker else value for value in args]
+    result = subprocess.run(  # nosec B603
+        [sys.executable, str(stage_file), *rewritten],
         cwd=str(bundle.root),
         capture_output=True,
+        input=payload,
         timeout=timeout,
-        text=True,
         env=scrubbed_direct_env(bundle.root),
+    )
+    return subprocess.CompletedProcess(
+        result.args,
+        result.returncode,
+        result.stdout.decode("utf-8", errors="replace"),
+        result.stderr.decode("utf-8", errors="replace"),
     )
 
 
@@ -171,6 +200,7 @@ def _run_stage_argv(
     *,
     timeout: int,
     output_dir_argument: Path | None = None,
+    private_input: tuple[str, bytes] | None = None,
 ) -> subprocess.CompletedProcess:
     """Invoke one numbered stage through its argparse CLI, asserting the declared
     output artifacts landed. Shared body for the five local-stage invokers."""
@@ -186,7 +216,9 @@ def _run_stage_argv(
         raise UsageError(f"Bundle {bundle.name} has no {stage} stage file")
     try:
         if unsafe_direct_enabled():
-            proc = _direct_run(bundle, stage_file, args, timeout=timeout)
+            proc = _direct_run(
+                bundle, stage_file, args, timeout=timeout, private_input=private_input
+            )
         else:
             proc = ContainerSandbox().run_stage(
                 bundle_root=bundle.root,
@@ -197,6 +229,7 @@ def _run_stage_argv(
                 output_paths=out_paths,
                 output_dir_argument=output_dir_argument,
                 limits=limits_for(bundle.manifest.raw, timeout),
+                private_input=private_input,
             )
     except FileNotFoundError as exc:
         raise UsageError(f"{stage} stage runner not found: {exc}") from exc
@@ -283,6 +316,26 @@ def run_decrypt_stage(
         bundle, "decrypt",
         ["--context", str(context), "--result", str(result), "--out", str(out_path)],
         [Path(context), Path(result)], [out_path], timeout=timeout)
+    return out_path
+
+
+def run_decrypt_stage_from_bytes(
+    bundle: Bundle, context: bytes, result: str | Path, out_path: str | Path,
+    *, timeout: int = 600,
+) -> Path:
+    """Decrypt with a secret context delivered over stdin, never a host file."""
+    marker = "__blind_private_context__"
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _run_stage_argv(
+        bundle,
+        "decrypt",
+        ["--context", marker, "--result", str(result), "--out", str(out_path)],
+        [Path(result)],
+        [out_path],
+        timeout=timeout,
+        private_input=(marker, context),
+    )
     return out_path
 
 

@@ -60,7 +60,7 @@ class ApiClient:
     ) -> Any:
         url = self._api_path(path)
         if auth_required and not (token or self.token):
-            raise AuthError("Not logged in. Run `blind login` or use --api-key-file/--api-key-stdin.")
+            raise AuthError("Not logged in. Run `blind login` or use --api-key-stdin.")
         try:
             resp = self._client.request(
                 method, url, json=json, params=params, headers=self._headers(token)

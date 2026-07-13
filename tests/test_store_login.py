@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import os
 import stat
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from blind.api import ApiClient
 from blind.errors import BlindError, UsageError, VerificationError
 from blind.login import login_with_api_key, login_with_device
-from blind.store import Store, enforce_https
+from blind.store import Store, _validate_private_file_info, blind_home, enforce_https
 from tests.conftest import mock_transport
 
 
@@ -24,12 +26,20 @@ def test_token_file_is_chmod_600():
     assert store.load_token("default") is None
 
 
-def test_token_read_refuses_open_permissions():
-    store = Store()
-    token = store.save_token("default", "tok_secret")
-    token.chmod(0o644)
+def test_production_home_ignores_legacy_environment_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("BLIND_HOME", str(tmp_path / "attacker-selected"))
+    assert blind_home() == (Path.home() / ".blind").absolute()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission enforcement")
+def test_private_file_metadata_refuses_open_permissions(tmp_path):
+    info = SimpleNamespace(
+        st_mode=stat.S_IFREG | 0o644,
+        st_size=10,
+        st_uid=os.geteuid(),
+    )
     with pytest.raises(VerificationError):
-        store.load_token("default")
+        _validate_private_file_info(info, tmp_path / "token", "token file", max_bytes=1024)
 
 
 def test_secret_fallback_file_is_600(monkeypatch):
@@ -58,7 +68,12 @@ def test_perms_report_flags_open_key(monkeypatch):
     store = Store()
     store.store_secret("proj_open", "x")
     keyfile = store.key_dir("proj_open") / "private.key"
-    os.chmod(keyfile, 0o644)  # deliberately too open
+    real_mode = Store._permission_mode
+    monkeypatch.setattr(
+        Store,
+        "_permission_mode",
+        staticmethod(lambda path: 0o644 if path == keyfile else real_mode(path)),
+    )
     report = store.perms_report()
     assert any("proj_open" in f for f in report["world_readable"])
 
@@ -139,11 +154,16 @@ def test_local_state_rejects_cross_platform_reserved_names(project):
         Store().key_dir(project)
 
 
-def test_perms_report_covers_owner_signing_key():
+def test_perms_report_covers_owner_signing_key(monkeypatch):
     store = Store()
     store.store_signing_key("proj_owner", "a" * 64)
     keyfile = store.key_dir("proj_owner") / "owner_signing.key"
-    os.chmod(keyfile, 0o644)
+    real_mode = Store._permission_mode
+    monkeypatch.setattr(
+        Store,
+        "_permission_mode",
+        staticmethod(lambda path: 0o644 if path == keyfile else real_mode(path)),
+    )
     report = store.perms_report()
     assert str(keyfile) in report["world_readable"]
 

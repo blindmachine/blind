@@ -15,11 +15,11 @@ from __future__ import annotations
 import os
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
 
 from blind.errors import VerificationError
 from blind.runtime.bundle import Bundle
 from blind.runtime.sandbox import ContainerSandbox, unsafe_direct_enabled
+from blind.store import Store
 
 
 @dataclass
@@ -48,10 +48,7 @@ def seal_env(bundle: Bundle, *, no_seal: bool = False, timeout: int = 600) -> Se
         # A signed application's build can execute arbitrary package build hooks.
         # Give each digest its own cache so it cannot poison another application's
         # future environment build through a shared writable uv cache.
-        cache = (
-            Path(os.environ.get("BLIND_HOME", str(Path.home() / ".blind")))
-            / "cache" / "uv" / bundle.digest.removeprefix("sha256:")
-        )
+        cache = Store().uv_cache_dir(bundle.digest)
         ContainerSandbox().build_environment(bundle.root, cache, timeout=timeout)
         # A build backend executes arbitrary code. The signed tree is mounted ro,
         # and this post-build check proves it did not change through another path.

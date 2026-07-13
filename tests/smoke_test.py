@@ -17,7 +17,7 @@ assert scripts["blindmachine"] == "blind.__main__:main"
 with tempfile.TemporaryDirectory(prefix="blind-smoke-") as home:
     env = {
         "PATH": os.environ.get("PATH", ""),
-        "BLIND_HOME": home,
+        "HOME": home,
         "BLIND_JSON": "1",
         "NO_COLOR": "1",
     }

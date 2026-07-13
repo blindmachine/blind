@@ -211,32 +211,74 @@ def test_login_with_api_key():
     assert data["account"] == "researcher@example.test"
 
 
-def test_api_key_private_file_flow(tmp_path):
+def test_password_stdin_login_flow():
+    captured = {}
+
+    def exchange(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={
+            "access_token": "tok_password",
+            "account": {"email": "password@example.test"},
+        })
+
     ctxmod.set_test_transport(mock_transport({
-        ("POST", "/api/v1/auth/token"): {"access_token": "tok_file"},
-        ("GET", "/api/v1/me"): {"email": "file@example.test"},
+        ("POST", "/api/v1/auth/token"): exchange,
     }))
-    key = tmp_path / "api-key"
-    key.write_text("sk_file_secret\n")
-    key.chmod(0o600)
-    r = runner.invoke(app, ["--json", "login", "--api-key-file", str(key)])
+    r = runner.invoke(
+        app,
+        ["--json", "login", "--email", "password@example.test", "--password-stdin"],
+        input="stdin-only-password  \n",
+    )
     assert r.exit_code == 0, r.stdout
-    assert _json_out(r)["method"] == "api_key"
+    assert _json_out(r)["method"] == "password"
+    assert captured["password"] == "stdin-only-password  "
 
 
-def test_credential_file_rejects_open_permissions(tmp_path):
-    key = tmp_path / "api-key"
-    key.write_text("sk_exposed\n")
-    key.chmod(0o644)
-    r = runner.invoke(app, ["--json", "login", "--api-key-file", str(key)])
-    assert r.exit_code != 0
-    assert "sk_exposed" not in r.stdout
+def test_password_stdin_registration_flow():
+    captured = {}
+
+    def register(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(201, json={
+            "access_token": "tok_registered",
+            "account": {"email": "new@example.test"},
+        })
+
+    ctxmod.set_test_transport(mock_transport({
+        ("POST", "/api/v1/auth/registration"): register,
+    }))
+    r = runner.invoke(
+        app,
+        ["--json", "register", "--email", "new@example.test", "--password-stdin"],
+        input="stdin-only-password\n",
+    )
+    assert r.exit_code == 0, r.stdout
+    assert _json_out(r)["method"] == "register"
+    assert captured["password"] == "stdin-only-password"
+
+
+def test_arbitrary_credential_file_flags_are_removed():
+    for flag in ("--api-key-file", "--password-file"):
+        r = runner.invoke(app, ["login", flag, "/tmp/must-not-be-read"])
+        assert r.exit_code == 2
+        assert "must-not-be-read" not in r.stdout
 
 
 def test_secret_values_are_not_accepted_as_cli_arguments():
-    r = runner.invoke(app, ["login", "--api-key", "must-not-appear"])
-    assert r.exit_code == 2
-    assert "must-not-appear" not in r.stdout
+    for args in (
+        ["login", "--api-key", "must-not-appear"],
+        ["login", "--email", "x@example.test", "--password", "must-not-appear"],
+    ):
+        r = runner.invoke(app, args)
+        assert r.exit_code == 2
+        assert "must-not-appear" not in r.stdout
+
+
+def test_stdin_credentials_reject_multiline_and_oversized_values():
+    for secret in ("first-line\nsecond-line\n", "x" * (16 * 1024 + 1)):
+        r = runner.invoke(app, ["login", "--api-key-stdin"], input=secret)
+        assert r.exit_code != 0
+        assert secret[:32] not in r.stdout
 
 
 def test_projects_create_cli():

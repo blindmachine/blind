@@ -9,6 +9,7 @@ leaves the machine here — that is the whole point of these being CLI-local.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import tempfile
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ from blind.runtime.bundle import (
 )
 from blind.runtime.compute import (
     run_decode_stage,
-    run_decrypt_stage,
+    run_decrypt_stage_from_bytes,
     run_encode_stage,
     run_encrypt_stage,
     run_keygen_stage,
@@ -121,8 +122,7 @@ def run_keygen(store: Store, project_id: str, bundle: Bundle) -> KeygenResult:
     is base64-wrapped before it goes into the string-only secret store."""
     d = store.key_dir(project_id)
     d.mkdir(parents=True, exist_ok=True)
-    scratch = store.home / "tmp"
-    scratch.mkdir(parents=True, exist_ok=True)
+    scratch = store.temporary_root()
     # V7.1 — the secret context (holding the FHE secret key) is materialized to a
     # temp dir so the stage subprocess can read it. Use a self-cleaning
     # TemporaryDirectory under the 0700 ~/.blind root (NOT shared /tmp) so the
@@ -181,23 +181,24 @@ def run_decrypt_decode(
 ) -> dict:
     """Run ``40_decrypt`` then ``50_decode`` locally with the project's secret
     context, returning the decoded aggregate dict."""
-    secret_b64, backend = store.load_secret(project_id)
+    secret_b64, _backend = store.load_secret(project_id)
     if secret_b64 is None:
         raise UsageError(f"No secret key for project {project_id} on this machine.")
-    scratch = store.home / "tmp"
-    scratch.mkdir(parents=True, exist_ok=True)
-    # V7.1 — secret context + decrypted plaintext are written to a temp dir for the
-    # decrypt/decode subprocesses. A self-cleaning TemporaryDirectory under the
-    # 0700 ~/.blind root removes them promptly, instead of leaving the secret key
-    # AND the cleartext result in a world-persistent /tmp file after the process
-    # exits. (result.json is written to out_dir, outside the scratch, so it stays.)
+    try:
+        secret_context = base64.b64decode(secret_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise VerificationError("Stored private context is not valid base64") from exc
+    if not secret_context:
+        raise VerificationError("Stored private context is empty")
+
+    scratch = store.temporary_root()
+    # Only the decrypted aggregate is materialized in this private, self-cleaning
+    # directory. The FHE secret itself crosses into the sandbox over an anonymous
+    # stdin pipe and is never reconstructed as a host file.
     with tempfile.TemporaryDirectory(prefix="blind-decrypt-", dir=str(scratch)) as tmp:
         work = Path(tmp)
-        secret_ctx = work / SECRET_CONTEXT_FILENAME
-        secret_ctx.write_bytes(base64.b64decode(secret_b64))
-
         plain = work / "plain.json"
-        run_decrypt_stage(bundle, secret_ctx, result_ct, plain)
+        run_decrypt_stage_from_bytes(bundle, secret_context, result_ct, plain)
 
         out_dir.mkdir(parents=True, exist_ok=True)
         result_json = out_dir / "result.json"

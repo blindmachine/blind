@@ -5,9 +5,9 @@ RFC-8628-style device flow:
   2. user approves at /device in a browser
   3. poll POST /api/v1/auth/token  → {access_token} (or {status: "pending"})
 
-Non-interactive: `--api-key-file <path>` or `--api-key-stdin` exchanges the key
-for a bearer token without exposing it in process arguments. The resulting token
-is stored at ~/.blind/auth/<profile>.token (chmod 600).
+Non-interactive: `--api-key-stdin` exchanges the key for a bearer token without
+exposing it in process arguments or an arbitrary credential file. The resulting
+token is stored at ~/.blind/auth/<profile>.token (chmod 600).
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def login_with_api_key(client: ApiClient, api_key: str) -> LoginResult:
 
 
 def login_with_password(client: ApiClient, email: str, password: str) -> LoginResult:
-    """Exchange prompted/private-file account credentials for a bearer token."""
+    """Exchange prompted/stdin account credentials for a bearer token."""
     from blind.errors import BlindError
 
     try:
@@ -51,7 +51,7 @@ def login_with_password(client: ApiClient, email: str, password: str) -> LoginRe
 
 
 def register_with_password(client: ApiClient, email: str, password: str) -> LoginResult:
-    """Create an account using a prompted/private-file password and return a token."""
+    """Create an account using a prompted/stdin password and return a token."""
     from blind.errors import BlindError
 
     try:

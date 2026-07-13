@@ -28,6 +28,13 @@ after a fix is available.
 - Private keys use the operating-system keychain by default. Plaintext file storage
   requires the explicit `BLIND_SECRET_BACKEND=file` escape hatch and is reported as
   insecure by `blind doctor`.
+- API keys and passwords are accepted only by a hidden prompt or standard input;
+  arbitrary credential-file and state-root paths are not part of the CLI surface.
+- A stored FHE secret context is delivered to the decrypt container through an
+  anonymous stdin pipe (`/dev/stdin`), never reconstructed as a host file.
+- Every pull request runs the multi-version tests, static and dependency audits,
+  full-history secret scan, distribution inspection, CodeQL, and a live kernel
+  sandbox probe before it can merge.
 - PyPI releases are built from clean tags and published through GitHub OIDC Trusted
   Publishing with attestations. No long-lived PyPI token is used.
 

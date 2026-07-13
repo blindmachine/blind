@@ -76,11 +76,11 @@ throwaway `~/.blind` — your real CLI config is never touched.
 
 - **Everything is a real `blind` subprocess call** — one isolated `~/.blind` per
   role — so the demo shows genuine CLI commands, not a reimplementation.
-- **Registration and login happen from the CLI**: each participant runs
-  `blind register --email … --password-file <private-file>` (or `blind login
-  --email … --password-file <private-file>` on a re-run),
+- **Registration and login happen from the CLI**: each participant pipes a
+  password to `blind register --email … --password-stdin` (or `blind login
+  --email … --password-stdin` on a re-run),
   which hits `POST /api/v1/auth/{registration,token}` and stores the bearer token in
-  that role's `~/.blind`. The CLI is the full surface — no web app, no API keys to
-  mint or scrape. The example creates the file with mode `0600` and removes it
-  immediately after authentication. The web app is only there for people who want
+  that role's `~/.blind`. The secret travels over an anonymous stdin pipe and is
+  never placed in argv or a credential file. The CLI is the full surface — no web
+  app, no API keys to mint or scrape. The web app is only there for people who want
   to *watch* the same study in a browser.

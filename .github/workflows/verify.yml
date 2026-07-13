@@ -63,18 +63,18 @@ jobs:
       - name: Verify lock and runtime metadata closure
         run: |
           uv lock --check
-          uv sync --locked --python 3.13 --extra dev
+          uv sync --locked --python 3.13 --extra dev --group security
           uv run --locked python scripts/check_runtime_lock.py
       - name: Lint reviewed source
         run: uv run --locked --extra dev ruff check src tests scripts examples
       - name: Scan Python security hazards
-        run: uvx --from bandit==1.9.4 bandit -q -r src examples
+        run: uv run --locked --group security bandit -q -r src examples
       - name: Audit locked runtime dependencies
         run: |
           uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file /tmp/blind-runtime.txt
-          uvx --from pip-audit==2.10.0 pip-audit --requirement /tmp/blind-runtime.txt --no-deps --disable-pip
+          uv run --locked --group security pip-audit --requirement /tmp/blind-runtime.txt --no-deps --disable-pip
       - name: Audit workflow security
-        run: uvx --from zizmor==1.26.1 zizmor .github/workflows
+        run: uv run --locked --group security zizmor .github/workflows
 
   secret-scan:
     name: Full-history secret scan
@@ -118,10 +118,10 @@ jobs:
         run: docker info
       - name: Sync the reviewed lock
         run: uv sync --locked --python 3.11
-      - name: Prove network, filesystem, privilege, and resource denial
+      - name: Prove isolation and pipe-only private input delivery
         env:
           BLIND_RUN_LIVE_SANDBOX_TESTS: "1"
-        run: uv run --locked pytest tests/test_sandbox.py::test_live_container_denies_every_escape
+        run: uv run --locked pytest tests/test_sandbox.py -m live_sandbox
 
   package:
     name: Build and inspect distributions

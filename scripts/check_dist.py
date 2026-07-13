@@ -238,7 +238,9 @@ def check_sdist(path: Path) -> None:
 
 
 def main() -> int:
-    dist = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "dist")
+    dist = ROOT / "dist"
+    if dist.is_symlink() or not dist.is_dir():
+        fail("dist must be a real directory inside the reviewed repository")
     wheels = sorted(dist.glob("*.whl"))
     sdists = sorted(dist.glob("*.tar.gz"))
     if len(wheels) != 1 or len(sdists) != 1:

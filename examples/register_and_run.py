@@ -207,15 +207,22 @@ def invite_ref(link: str) -> str:
     return link.split("/c/", 1)[1] if "/c/" in link else link
 
 
-def blind(home: str, *args, api: str, signing_key: str = "", capture: bool = False,
-          check: bool = True):
+def blind(
+    home: str,
+    *args,
+    api: str,
+    signing_key: str = "",
+    capture: bool = False,
+    check: bool = True,
+    secret_input: str | None = None,
+):
     """Run `uv run blind --api <server> ...` as one role. When capture=True we set
     BLIND_JSON=1 and return the parsed object; otherwise the CLI's own transcript
     streams straight to the terminal (so you see exactly what it did). check=False
     returns None on a non-zero exit instead of aborting (used for try-login-first)."""
     env = {
         **os.environ,
-        "BLIND_HOME": home,
+        "HOME": home,
     }
     # Only override the bundle-verification key when the caller explicitly asked
     # for one. By default the CLI uses its built-in trust anchor, which is what
@@ -231,7 +238,7 @@ def blind(home: str, *args, api: str, signing_key: str = "", capture: bool = Fal
         env["BLIND_JSON"] = "1"
         # The executable is resolved by shutil.which and no shell is involved.
         p = subprocess.run(  # nosec B603
-            cmd, cwd=CLI_DIR, env=env, capture_output=True, text=True
+            cmd, cwd=CLI_DIR, env=env, capture_output=True, text=True, input=secret_input
         )
         if p.returncode != 0:
             if not check:
@@ -241,7 +248,7 @@ def blind(home: str, *args, api: str, signing_key: str = "", capture: bool = Fal
         return _loads(p.stdout)
     print(_c(CMD, "$ blind " + " ".join(str(a) for a in args)))
     sys.stdout.flush()  # keep our narration ordered ahead of the child's inherited stdout
-    p = subprocess.run(cmd, cwd=CLI_DIR, env=env)  # nosec B603
+    p = subprocess.run(cmd, cwd=CLI_DIR, env=env, text=True, input=secret_input)  # nosec B603
     if p.returncode != 0:
         die(f"`blind {' '.join(str(a) for a in args)}` failed (exit {p.returncode})")
     return None
@@ -254,28 +261,18 @@ def ensure_account_cli(home: str, email: str, password: str, *, api: str, signin
     Login-first keeps re-runs off the signup throttle; prints the (password-masked)
     command that actually ran + a ✓, and returns the human status."""
     pathlib.Path(home).mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, password_path = tempfile.mkstemp(prefix=".blind-demo-password-", dir=home)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(password)
-        kw = dict(api=api, signing_key=signing_key, capture=True)
-        login = blind(
-            home, "login", "--email", email, "--password-file", password_path,
-            check=False, **kw,
-        )
-        if login and login.get("account"):
-            print(_c(CMD, f"$ blind login --email {email} --password-file <private-file>"))
-            ok(f"{email:<26} already registered → signed in")
-            return "signed in"
-        print(_c(CMD, f"$ blind register --email {email} --password-file <private-file>"))
-        blind(
-            home, "register", "--email", email, "--password-file", password_path, **kw,
-        )
-        ok(f"{email:<26} registered")
-        return "registered"
-    finally:
-        pathlib.Path(password_path).unlink(missing_ok=True)
+    kw = dict(api=api, signing_key=signing_key, capture=True, secret_input=password + "\n")
+    login = blind(
+        home, "login", "--email", email, "--password-stdin", check=False, **kw,
+    )
+    if login and login.get("account"):
+        print(_c(CMD, f"$ blind login --email {email} --password-stdin"))
+        ok(f"{email:<26} already registered → signed in")
+        return "signed in"
+    print(_c(CMD, f"$ blind register --email {email} --password-stdin"))
+    blind(home, "register", "--email", email, "--password-stdin", **kw)
+    ok(f"{email:<26} registered")
+    return "registered"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

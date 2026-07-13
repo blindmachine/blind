@@ -35,7 +35,7 @@ Porcelain flags: `projects start` takes `--name`, `--min`/`--min-contributors`
 (default 20), `--scenario`; `contribute` takes `--pin-context <digest>` (override
 the invite packet's public-context digest); `projects run` takes `--yes`/`-y`
 (skip the freeze/cost confirm), `--timeout`, `--interval`. All accept the global
-flags (`--json`, `--quiet`, `--api`, `--api-key-file`, `--api-key-stdin`,
+flags (`--json`, `--quiet`, `--api`, `--api-key-stdin`,
 `--project`, …).
 
 The mapping, at a glance:
@@ -95,7 +95,6 @@ never removed.
 |---|---|
 | `--json` | machine-readable output (guaranteed for **every** command; the GUI depends on it) |
 | `--project <id>` | set the active project for project-scoped commands |
-| `--api-key-file <path>` | read an API key from a private regular file (mode `0600` on POSIX) |
 | `--api-key-stdin` | read an API key from standard input without exposing it in process arguments |
 | `--profile <name>` | select an `~/.blind` auth/config profile (default `default`) |
 | `--color auto\|on\|off` | control ANSI color (default `auto`) |
@@ -112,8 +111,9 @@ explicit flag always wins):
 | `BLIND_JSON=1` | default to `--json` output |
 | `BLIND_QUIET=1` | default to `--quiet` output |
 | `NO_COLOR=1` | disable ANSI color |
-| `BLIND_HOME=<dir>` | relocate `~/.blind` state |
-| `BLIND_API_KEY_FILE=<path>` | private file supplying an invocation API key |
+
+Local state is always rooted at `~/.blind`; credential and state-directory paths
+cannot be supplied through process arguments or environment variables.
 
 The base URL (`--api` / `config.yml`) is guarded: a non-loopback `http://` URL is
 refused so a bearer token never travels in cleartext, and a single dim notice is
@@ -139,8 +139,8 @@ an account token — a contributor never needs a The Blind Machine account.
 
 | Command | Description | LOCAL/REMOTE | Key flags | Hashes |
 |---|---|---|---|---|
-| `blind register` | Create an account and store its token — the CLI is the full surface, so signup never requires the web app | REMOTE | `--email <e>`; hidden password prompt or `--password-file <private-file>` | — |
-| `blind login` | Obtain and store an API token by email/password, API key, or device/browser code flow | REMOTE | `--email <e>` plus hidden prompt/`--password-file`; `--api-key-file`; `--api-key-stdin`; `--profile` | — |
+| `blind register` | Create an account and store its token — the CLI is the full surface, so signup never requires the web app | REMOTE | `--email <e>`; hidden password prompt or `--password-stdin` | — |
+| `blind login` | Obtain and store an API token by email/password, API key, or device/browser code flow | REMOTE | `--email <e>` plus hidden prompt/`--password-stdin`; `--api-key-stdin`; `--profile` | — |
 | `blind logout` | Delete the stored token for the profile | LOCAL | `--profile` | — |
 | `blind config` | View or edit `~/.blind/config.yml` (api URL, active profile, output prefs, account) | LOCAL | `--list`, `--set k=v`, `--json` | — |
 | `blind doctor` | Verify Python, the **sandbox/container runtime** (`podman`/`docker`, `--network none` ok), the **`uv` env-sealer**, OS keychain, `cryptography` (Ed25519), `~/.blind` perms, a **sealed-env self-test** (newest installed application imports its own crypto), and API reachability | BOTH | `--json`, `--offline` (skip API ping) | — |
