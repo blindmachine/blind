@@ -1,8 +1,7 @@
 name: Release to PyPI
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,9 +18,38 @@ jobs:
     permissions:
       contents: read
 
+  tag:
+    name: Verify immutable release tag
+    if: github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: pypi
+    permissions:
+      contents: read
+    outputs:
+      name: ${{ steps.release-tag.outputs.name }}
+    steps:
+      - name: Check out the verified main revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify the exact version tag
+        id: release-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REF" = "refs/heads/main"
+          tag="$(python3 scripts/check_release_tag.py --allow-main --print-tag)"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.sha')" = "$GITHUB_SHA"
+          printf 'name=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
   publish:
     name: Publish verified artifacts
-    needs: verify
+    needs: [verify, tag]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
@@ -43,4 +71,3 @@ jobs:
           attestations: true
           print-hash: true
           verbose: true
-

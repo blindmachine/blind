@@ -52,6 +52,7 @@ jobs:
       - name: Check out without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -65,6 +66,8 @@ jobs:
           uv lock --check
           uv sync --locked --python 3.13 --extra dev --group security
           uv run --locked python scripts/check_runtime_lock.py
+      - name: Verify commit metadata privacy
+        run: uv run --locked python scripts/check_commit_metadata.py --allow-pull-request-merge
       - name: Lint reviewed source
         run: uv run --locked --extra dev ruff check src tests scripts examples
       - name: Scan Python security hazards
@@ -142,7 +145,7 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Verify release tag
         if: inputs.release
-        run: uv run --locked python scripts/check_release_tag.py
+        run: uv run --locked python scripts/check_release_tag.py --allow-main
       - name: Verify the lock before building
         run: |
           uv lock --check
