@@ -19,8 +19,8 @@ from pathlib import Path, PurePosixPath
 from blind.errors import UsageError, VerificationError
 
 PINNED_RUNNER_IMAGE = (
-    "docker.io/hbocraft/blind-runner@"
-    "sha256:ec67d8e39f0924ec1289cfb3b3b952e315e1e0edb644e788b976d5c07d6867a2"
+    "ghcr.io/astral-sh/uv@"
+    "sha256:a353f5507610049c620893cfe3c91b6ce613abbd8292cddfcee2e05440956117"
 )
 _IMAGE_PATTERN = re.compile(r"^[a-zA-Z0-9._/:@-]+@sha256:[0-9a-f]{64}$")
 _PLATFORM_PATTERN = re.compile(r"^linux/(?:amd64|arm64)$")

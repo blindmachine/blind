@@ -14,6 +14,7 @@ permissions:
 
 env:
   UV_VERSION: 0.11.28
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9 # v8.30.0
 
 jobs:
   tests:
@@ -62,10 +63,10 @@ jobs:
       - name: Verify lock and runtime metadata closure
         run: |
           uv lock --check
-          uv sync --locked --python 3.13
+          uv sync --locked --python 3.13 --extra dev
           uv run --locked python scripts/check_runtime_lock.py
       - name: Lint reviewed source
-        run: uv run --locked ruff check src tests scripts examples
+        run: uv run --locked --extra dev ruff check src tests scripts examples
       - name: Scan Python security hazards
         run: uvx --from bandit==1.9.4 bandit -q -r src examples
       - name: Audit locked runtime dependencies
@@ -86,11 +87,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Scan git history with pinned Gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_COMMENTS: "false"
-          GITLEAKS_ENABLE_SUMMARY: "true"
+        run: |
+          docker pull --platform linux/amd64 "$GITLEAKS_IMAGE"
+          docker run --rm --platform linux/amd64 \
+            --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges=true \
+            --user "$(id -u):$(id -g)" \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+            --mount type=bind,source="$PWD",target=/repo,readonly \
+            --workdir /repo "$GITLEAKS_IMAGE" \
+            detect --source . --verbose --no-banner --redact
 
   live-sandbox:
     name: Live kernel sandbox probe
@@ -136,7 +142,7 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Verify release tag
         if: inputs.release
-        run: python scripts/check_release_tag.py
+        run: uv run --locked python scripts/check_release_tag.py
       - name: Verify the lock before building
         run: |
           uv lock --check
@@ -144,7 +150,7 @@ jobs:
       - name: Build wheel and source distribution
         run: uv build --no-sources
       - name: Inspect exact artifact contents
-        run: python scripts/check_dist.py
+        run: uv run --locked python scripts/check_dist.py
       - name: Smoke-test the wheel in a fresh environment
         run: |
           uv venv --python 3.11 /tmp/blind-wheel-smoke
