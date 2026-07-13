@@ -1,0 +1,46 @@
+name: Release to PyPI
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
+    with:
+      release: true
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish verified artifacts
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/blindmachine/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download verified distributions only
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: distributions
+          path: dist
+      - name: Publish with PyPI Trusted Publishing and attestations
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: dist/
+          attestations: true
+          print-hash: true
+          verbose: true
+
