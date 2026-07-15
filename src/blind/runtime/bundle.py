@@ -238,6 +238,11 @@ def verify_download_structure(bundle_root: Path) -> None:
     package_root = Path(bundle_root)
     payload_root = bundle_payload_root(package_root)
     new_contract = (payload_root / "server.py").is_file()
+    # The server's archive ships the detached signature at the package root
+    # (BundleArchiver: excluded from identity, required for offline review).
+    # `applications install` overwrites it with the separately fetched signature
+    # before verifying, so its presence in the tar carries no authority.
+    allowed_derived = {package_root / ".blind-signature"}
     for path in package_root.rglob("*"):
         relative_package = path.relative_to(package_root)
         relative_payload = path.relative_to(payload_root) if path.is_relative_to(payload_root) else None
@@ -251,7 +256,7 @@ def verify_download_structure(bundle_root: Path) -> None:
             raise VerificationError(
                 f"Downloaded bundle contains unsigned bytecode: {relative_package}"
             )
-        if path.name in DERIVED_BUNDLE_FILES:
+        if path.name in DERIVED_BUNDLE_FILES and path not in allowed_derived:
             raise VerificationError(
                 f"Downloaded bundle contains a locally derived file: {relative_package}"
             )

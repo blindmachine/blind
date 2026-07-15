@@ -296,3 +296,61 @@ def test_projects_create_cli():
     assert r.exit_code == 0, r.stdout
     data = _json_out(r)
     assert data["id"] == "proj_9"
+
+
+def test_applications_install_resolves_digest_by_bare_name(make_bundle, signing_keys):
+    """`blind applications install <name>` (no @digest) must resolve the newest
+    version's digest from the registry `show` payload. That payload mirrors
+    Application#to_api_hash, where the digest lives ONLY nested under
+    `versions[].digest` (newest first). Regression: the resolver used to read a
+    top-level `latest_digest`/`digest` the server never sends, so every bare-name
+    install failed with "Could not resolve a digest for <name>".
+    """
+    src, application_id = make_bundle(sign=True)
+    name, digest = application_id.split("@", 1)
+    route_digest = digest.removeprefix("sha256:")
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        tf.add(
+            src,
+            arcname="bundle",
+            filter=lambda member: None if member.name.endswith("/.blind-signature") else member,
+        )
+    tar_bytes = buf.getvalue()
+    sig_bytes = (src / ".blind-signature").read_text().strip().encode()
+
+    # Deliberately NO top-level digest — force resolution through `versions`,
+    # exactly as the deployed registry serves it.
+    show_body = {
+        "slug": name,
+        "name": name,
+        "summary": "test app",
+        "versions": [
+            {
+                "version": 1,
+                "digest": digest,
+                "min_contributors": 20,
+                "allowed_runs_per_project": 5,
+                "aggregate_only": True,
+                "env_lock_digest": "x",
+                "signature": sig_bytes.decode(),
+                "published_at": None,
+            }
+        ],
+    }
+
+    ctxmod.set_test_transport(mock_transport({
+        ("GET", f"/api/v1/applications/{name}"): show_body,
+        ("GET", f"/api/v1/applications/{name}/versions/{route_digest}/bundle"):
+            lambda _request: httpx.Response(200, content=tar_bytes),
+        ("GET", f"/api/v1/applications/{name}/versions/{route_digest}/signature"):
+            lambda _request: httpx.Response(200, content=sig_bytes),
+    }))
+
+    r = runner.invoke(app, ["--json", "applications", "install", name])
+    assert r.exit_code == 0, r.stdout
+    data = _json_out(r)
+    assert data["digest"] == digest
+    assert data["digest_verified"] is True
+    assert data["signature_verified"] is True
