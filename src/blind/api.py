@@ -405,9 +405,17 @@ class ApiClient:
         """Download the Encrypted result. The server streams raw octet-stream
         bytes + an ``X-Result-Digest`` header — not JSON."""
         resp = self._raw_body("GET", f"jobs/{job_id}/result")
+        digest = resp.headers.get("X-Result-Digest", "")
+        # Fail closed by construction: an honest server ALWAYS sets this integrity
+        # header (jobs_controller#result), so an absent/empty one is a hostile or
+        # tampering middlebox — never return unverifiable bytes to a caller (belt to
+        # each caller's digest-match brace via hashing.require_result_digest).
+        if not normalize_digest(digest):
+            raise VerificationError(
+                "Result response is missing the X-Result-Digest integrity header")
         return {
             "ciphertext_bytes": resp.content,
-            "result_digest": resp.headers.get("X-Result-Digest", ""),
+            "result_digest": digest,
         }
 
     def list_certificates(self, project_id: str) -> dict:

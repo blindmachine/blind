@@ -22,6 +22,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from blind.errors import VerificationError
+
 # Files that are NOT covered by the canonical bundle digest. `.blind-signature`
 # is the signature over the digest; `.digest` and `env_lock` are derived
 # artifacts the CLI writes at install time (README ~/.blind layout).
@@ -103,6 +105,26 @@ def digests_match(a: str | None, b: str | None) -> bool:
     of evidence is not a verification."""
     na, nb = normalize_digest(a), normalize_digest(b)
     return bool(na) and na == nb
+
+
+def require_result_digest(server_digest: str | None, data: bytes, *, what: str = "result") -> str:
+    """Fail-closed integrity gate for bytes handed to us by the (untrusted) server.
+
+    A hostile server can strip the integrity digest header (e.g. ``X-Result-Digest``)
+    just as easily as it can tamper with the bytes, so an ABSENT digest is a
+    verification FAILURE, not a pass — never write or decrypt bytes we could not
+    check. Returns the local ``sha256:`` digest when the server's digest is present
+    and matches; raises :class:`~blind.errors.VerificationError` (exit 6) otherwise.
+    """
+    local = sha256_prefixed(data)
+    if digests_match(server_digest, local):
+        return local
+    if not normalize_digest(server_digest):
+        raise VerificationError(
+            f"Server supplied no {what} digest — refusing to trust unverified bytes",
+            detail="missing integrity digest (a hostile server can strip it)",
+        )
+    raise VerificationError(f"{what.capitalize()} digest mismatch: {local} != {server_digest}")
 
 
 def bundle_payload_root(root: str | Path) -> Path:

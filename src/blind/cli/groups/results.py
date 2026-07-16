@@ -8,8 +8,7 @@ import typer
 
 from blind import console
 from blind.context import Context, emit
-from blind.errors import VerificationError
-from blind.hashing import digests_match, sha256_prefixed, short
+from blind.hashing import require_result_digest, sha256_prefixed, short
 from blind.workspace import resolve_project_bundle, run_decrypt_decode
 
 app = typer.Typer(help="Download / decrypt results.", no_args_is_help=True)
@@ -19,7 +18,7 @@ def _ctx(c: typer.Context) -> Context:
     return c.obj
 
 
-def _download_result(ctx: Context, job: str) -> tuple[dict, str, str]:
+def _download_result(ctx: Context, job: str) -> tuple[dict, str, str, bytes]:
     data = ctx.client().retrieve_result(job)
     ct = data.get("ciphertext_bytes", b"")
     if isinstance(ct, str):
@@ -34,9 +33,10 @@ def _download_result(ctx: Context, job: str) -> tuple[dict, str, str]:
 def retrieve(c: typer.Context, job: str, out: str = typer.Option(None, "--out")):
     ctx = _ctx(c)
     data, server_digest, local_digest, ct_bytes = _download_result(ctx, job)
-    verified = digests_match(server_digest, local_digest)
-    if not verified and server_digest:
-        raise VerificationError(f"Result digest mismatch: {local_digest} != {server_digest}")
+    # Fail closed: absent OR mismatched digest refuses the bytes (a hostile
+    # server can strip the header as easily as it can tamper with the payload).
+    require_result_digest(server_digest, ct_bytes)
+    verified = True
     dest = Path(out) if out else ctx.store.home / "results" / job
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "result.ct").write_bytes(ct_bytes)
@@ -57,8 +57,9 @@ def decrypt(c: typer.Context, job: str, project: str = typer.Option(None, "--pro
             display: str = typer.Option(None, "--display")):
     ctx = _ctx(c)
     data, server_digest, local_digest, ct_bytes = _download_result(ctx, job)
-    if server_digest and not digests_match(server_digest, local_digest):
-        raise VerificationError(f"Result digest mismatch: {local_digest} != {server_digest}")
+    # Fail closed BEFORE decrypting: never feed unverified ciphertext to the
+    # local secret key. Absent digest == verification failure, not a pass.
+    require_result_digest(server_digest, ct_bytes)
 
     project = project or data.get("project_id")
     if not project:

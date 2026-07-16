@@ -191,14 +191,19 @@ def test_run_refuses_cleanly_when_below_min_n():
 def test_run_conducts_freeze_dispatch_decrypt(installed):
     from blind.workspace import run_keygen
 
+    from blind.hashing import sha256_prefixed
+
     store, bundle, application_id = installed
     project = "proj_run"
     run_keygen(store, project, bundle)  # the owner's LOCAL secret key
     result_stub = json.dumps({"vector": [3, 3, 3, 2], "sentinel": 3}).encode()
+    # The server's X-Result-Digest MUST equal sha256(ciphertext) or the local
+    # fail-closed check refuses the bytes before they touch the secret key.
+    result_digest = sha256_prefixed(result_stub)
 
     def result_route(_request):
         return httpx.Response(200, content=result_stub,
-                              headers={"X-Result-Digest": "sha256:rd"})
+                              headers={"X-Result-Digest": result_digest})
 
     ctxmod.set_test_transport(mock_transport({
         ("GET", f"/api/v1/projects/{project}"): {
@@ -220,6 +225,41 @@ def test_run_conducts_freeze_dispatch_decrypt(installed):
     assert d["sentinel_n"] == 3
     assert d["certificate_hash"] == "certhash123"
     assert d["verify_command"] == "blind verify certhash123"
+
+
+def test_run_fails_closed_when_server_strips_result_digest(installed):
+    """A hostile server that omits X-Result-Digest must NOT get its (possibly
+    swapped) ciphertext decrypted by the owner's secret key — the porcelain run
+    path refuses unverified bytes rather than warning-and-continuing."""
+    from blind.errors import VerificationError
+    from blind.workspace import run_keygen
+
+    store, bundle, application_id = installed
+    project = "proj_strip"
+    run_keygen(store, project, bundle)
+    result_stub = json.dumps({"vector": [1, 1, 1, 1], "sentinel": 3}).encode()
+
+    def result_route(_request):
+        # No X-Result-Digest header at all.
+        return httpx.Response(200, content=result_stub)
+
+    ctxmod.set_test_transport(mock_transport({
+        ("GET", f"/api/v1/projects/{project}"): {
+            "id": project, "state": "active", "cohort_size": 3,
+            "min_contributors": 3, "min_n_satisfied": True},
+        ("POST", f"/api/v1/projects/{project}/jobs/estimate"): {"estimated_cost_usd": "0.02"},
+        ("POST", f"/api/v1/projects/{project}/freeze"): {
+            "cohort_commitment": "sha256:cc", "cohort_size": 3},
+        ("POST", f"/api/v1/projects/{project}/jobs"): {
+            "id": "job_2", "state": "completed", "certificate_hash": "certhash999"},
+        ("GET", "/api/v1/jobs/job_2/result"): result_route,
+    }))
+    r = runner.invoke(
+        app, ["--json", "--api-key-stdin", "-y", "projects", "run", project], input="k\n"
+    )
+    assert r.exit_code != 0
+    assert isinstance(r.exception, VerificationError)
+    assert r.exception.code == 6  # stable "verify" exit code
 
 
 # -- blind projects proof <id> ---------------------------------------------
