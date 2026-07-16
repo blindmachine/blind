@@ -221,6 +221,11 @@ def verify(c: typer.Context, name: str, all_: bool = typer.Option(False, "--all"
         console.status_line(checks["env_lock"], "env_lock", short(b.compute_env_lock()))
 
     emit(ctx, view, render)
+    # Fail closed on the EXIT CODE too, not just the rendered rows: a scripted /
+    # CI caller that trusts `blind applications verify` must see a nonzero exit
+    # for a tampered, unsigned, or env-drifted bundle (mirrors `certificates verify`).
+    if not ok:
+        raise typer.Exit(code=VerificationError.code)
 
 
 @app.command("explain")

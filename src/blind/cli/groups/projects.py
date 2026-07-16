@@ -7,7 +7,7 @@ import typer
 from blind import console
 from blind.context import Context, emit
 from blind.errors import UsageError, VerificationError
-from blind.hashing import short
+from blind.hashing import require_result_digest, short
 
 app = typer.Typer(help="Studies + governance.", no_args_is_help=True)
 
@@ -207,6 +207,10 @@ def events(c: typer.Context, id: str, since: str = typer.Option(None, "--since")
                                 "hash chain intact" if chain_ok else "CHAIN BROKEN")
 
     emit(ctx, view, render)
+    # A broken append-only chain must fail the exit code too, not just print red:
+    # `blind verify --project <id>` is a gate a reviewer/CI can script on.
+    if verify and not chain_ok:
+        raise typer.Exit(code=VerificationError.code)
 
 
 def _verify_event_chain(events: list[dict]) -> bool:
@@ -435,6 +439,10 @@ def run(
     result = ctx.client().retrieve_result(job_id)
     ct = result.get("ciphertext_bytes", b"")
     ct = ct.encode() if isinstance(ct, str) else bytes(ct)
+    # Fail closed on the server-delivered ciphertext BEFORE it touches the local
+    # secret key: an absent OR mismatched result digest refuses the bytes (a
+    # hostile server can strip the digest as easily as it can swap the payload).
+    require_result_digest(result.get("result_digest", ""), ct)
     bundle = resolve_project_bundle(ctx.store, id)
     result_dir = ctx.store.result_dir(id, job_id)
     result_dir.mkdir(parents=True, exist_ok=True)

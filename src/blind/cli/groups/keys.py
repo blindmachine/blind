@@ -12,7 +12,7 @@ import typer
 from blind import console, trust
 from blind.context import Context, emit
 from blind.errors import UsageError, VerificationError
-from blind.hashing import digests_match, sha256_file, short
+from blind.hashing import digests_match, sha256_file, sha256_prefixed, short
 from blind.workspace import (
     read_project_meta,
     resolve_project_bundle,
@@ -114,7 +114,12 @@ def retrieve(c: typer.Context, project: str = typer.Option(..., "--project")):
     local_pub = ctx.store.key_dir(project) / "public.context"
     local_hash = sha256_file(local_pub) if local_pub.exists() else None
     # Fetch failures propagate: reporting "local only" would hide a failed tamper check.
-    server_hash = ctx.client().get_public_context(project).get("public_context_digest")
+    # Hash the BYTES we received rather than trusting the server's self-reported
+    # X-Public-Context-Digest header (an untrusted server would just echo a matching
+    # header for tampered bytes).
+    resp = ctx.client().get_public_context(project)
+    server_bytes = resp.get("public_context_bytes") or b""
+    server_hash = sha256_prefixed(server_bytes) if server_bytes else None
     matches = digests_match(server_hash, local_hash) if (server_hash and local_hash) else None
     view = {
         "object": "keys_status",
@@ -133,6 +138,10 @@ def retrieve(c: typer.Context, project: str = typer.Option(..., "--project")):
                             "matches server" if matches else ("local only" if matches is None else "MISMATCH"))
 
     emit(ctx, view, render)
+    # A definite local≠server public-context mismatch is a substitution/tamper
+    # signal — fail the exit code instead of only rendering "MISMATCH" in red.
+    if matches is False:
+        raise typer.Exit(code=VerificationError.code)
 
 
 @app.command("list")
