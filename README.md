@@ -2,6 +2,8 @@
 
 > The machine can compute, but it cannot see.
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21448891.svg)](https://doi.org/10.5281/zenodo.21448891)
+
 Many scientific questions go unanswered because the data needed to answer them
 cannot be pooled. The records exist — five hospitals each hold a slice of a
 rare-disease cohort — and the answer is usually a plain summary over many
