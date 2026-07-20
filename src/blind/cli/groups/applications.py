@@ -26,25 +26,6 @@ def _ctx(c: typer.Context) -> Context:
     return c.obj
 
 
-def latest_digest_from(meta: dict) -> str:
-    """Resolve the newest version's digest from a registry application payload.
-
-    The server nests version digests under ``versions`` (ordered newest-first,
-    ``published_at`` desc), so the newest is ``versions[0].digest``. A top-level
-    ``latest_digest`` / ``digest`` is accepted as a fallback for other registry
-    shapes. Returns "" when no digest can be found — callers turn that into a
-    clear resolution error.
-    """
-    versions = meta.get("versions") if isinstance(meta, dict) else None
-    if versions:
-        newest = versions[0]
-        if isinstance(newest, dict) and newest.get("digest"):
-            return newest["digest"]
-    if isinstance(meta, dict):
-        return meta.get("latest_digest") or meta.get("digest") or ""
-    return ""
-
-
 @app.command("list")
 def list_applications(c: typer.Context, crypto: str = typer.Option(None, "--crypto")):
     ctx = _ctx(c)
@@ -56,8 +37,8 @@ def list_applications(c: typer.Context, crypto: str = typer.Option(None, "--cryp
         rows = []
         for p in applications:
             versions = p.get("versions") or []
-            latest = versions[0] if versions else {}
-            digest = latest_digest_from(p)
+            latest = versions[-1] if versions else {}
+            digest = latest.get("digest") or p.get("latest_digest", "")
             rows.append([
                 p.get("name", p.get("slug", "")),
                 str(latest.get("min_contributors", p.get("min_contributors", ""))),
@@ -108,7 +89,7 @@ def install(
     client = ctx.client()
     if not digest:  # resolve latest digest from the registry
         meta = client.retrieve_application(base)
-        digest = latest_digest_from(meta)
+        digest = meta.get("latest_digest") or meta.get("digest")
     if not digest:
         raise VerificationError(f"Could not resolve a digest for {base}")
     digest = validate_digest(digest, "registry application digest")

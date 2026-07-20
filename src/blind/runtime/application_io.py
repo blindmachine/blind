@@ -99,9 +99,15 @@ def _encoded_vector(io: "ApplicationIO", vec: list[int], length: int) -> list[in
     )
     encoded: list[int] = []
     for value in vec:
-        if value not in domain:
-            raise ValueError(f"synthetic value {value!r} is outside the manifest domain")
-        encoded.append(1 if io.name == "carrier-indicator" and value >= 1 else int(value))
+        # `value_domain` describes the ENCODED value space, so apply the manifest's
+        # encoding (carrier-indicator thresholds a {0,1,2} genotype dosage to {0,1})
+        # BEFORE the domain check — otherwise a legitimate raw dosage of 2 is wrongly
+        # rejected against a carrier app's [0,1] domain. The check still fails closed
+        # on any encoded value the manifest doesn't permit.
+        encoded_value = 1 if io.name == "carrier-indicator" and value >= 1 else int(value)
+        if encoded_value not in domain:
+            raise ValueError(f"encoded value {encoded_value!r} is outside the manifest domain")
+        encoded.append(encoded_value)
     return encoded + [0] * (length - len(encoded))
 
 

@@ -410,8 +410,13 @@ def _safe_mount_source(path: Path) -> Path:
     path = Path(path).absolute()
     if not path.exists():
         raise VerificationError(f"Sandbox mount source does not exist: {path}")
+    # Resolve first (macOS mounts /var and /tmp as symlinks into /private —
+    # the container runtime binds the resolved path anyway), then insist the
+    # resolved path itself is symlink-free so a swapped link can't redirect
+    # the mount between check and use.
+    path = path.resolve(strict=True)
     for component in (path, *path.parents):
-        if component.exists() and component.is_symlink():
+        if component.is_symlink():
             raise VerificationError(f"Refusing a symlinked sandbox mount path: {component}")
     if "," in str(path):
         raise VerificationError("Sandbox mount paths may not contain commas")

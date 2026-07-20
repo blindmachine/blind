@@ -199,163 +199,6 @@ def test_verify_dispatch_to_application(installed):
     assert data["verified"] is True
 
 
-def test_login_with_api_key():
-    ctxmod.set_test_transport(mock_transport({
-        ("POST", "/api/v1/auth/token"): {"access_token": "tok_abc"},
-        ("GET", "/api/v1/me"): {"email": "researcher@example.test"},
-    }))
-    r = runner.invoke(app, ["--json", "login", "--api-key-stdin"], input="sk_test_123\n")
-    assert r.exit_code == 0, r.stdout
-    data = _json_out(r)
-    assert data["method"] == "api_key"
-    assert data["account"] == "researcher@example.test"
-
-
-def test_password_stdin_login_flow():
-    captured = {}
-
-    def exchange(request):
-        captured.update(json.loads(request.content))
-        return httpx.Response(200, json={
-            "access_token": "tok_password",
-            "account": {"email": "password@example.test"},
-        })
-
-    ctxmod.set_test_transport(mock_transport({
-        ("POST", "/api/v1/auth/token"): exchange,
-    }))
-    r = runner.invoke(
-        app,
-        ["--json", "login", "--email", "password@example.test", "--password-stdin"],
-        input="stdin-only-password  \n",
-    )
-    assert r.exit_code == 0, r.stdout
-    assert _json_out(r)["method"] == "password"
-    assert captured["password"] == "stdin-only-password  "
-
-
-def test_password_stdin_registration_flow():
-    captured = {}
-
-    def register(request):
-        captured.update(json.loads(request.content))
-        return httpx.Response(201, json={
-            "access_token": "tok_registered",
-            "account": {"email": "new@example.test"},
-        })
-
-    ctxmod.set_test_transport(mock_transport({
-        ("POST", "/api/v1/auth/registration"): register,
-    }))
-    r = runner.invoke(
-        app,
-        ["--json", "register", "--email", "new@example.test", "--password-stdin"],
-        input="stdin-only-password\n",
-    )
-    assert r.exit_code == 0, r.stdout
-    assert _json_out(r)["method"] == "register"
-    assert captured["password"] == "stdin-only-password"
-
-
-def test_arbitrary_credential_file_flags_are_removed():
-    for flag in ("--api-key-file", "--password-file"):
-        r = runner.invoke(app, ["login", flag, "/tmp/must-not-be-read"])
-        assert r.exit_code == 2
-        assert "must-not-be-read" not in r.stdout
-
-
-def test_secret_values_are_not_accepted_as_cli_arguments():
-    for args in (
-        ["login", "--api-key", "must-not-appear"],
-        ["login", "--email", "x@example.test", "--password", "must-not-appear"],
-    ):
-        r = runner.invoke(app, args)
-        assert r.exit_code == 2
-        assert "must-not-appear" not in r.stdout
-
-
-def test_stdin_credentials_reject_multiline_and_oversized_values():
-    for secret in ("first-line\nsecond-line\n", "x" * (16 * 1024 + 1)):
-        r = runner.invoke(app, ["login", "--api-key-stdin"], input=secret)
-        assert r.exit_code != 0
-        assert secret[:32] not in r.stdout
-
-
-def test_projects_create_cli():
-    ctxmod.set_test_transport(mock_transport({
-        ("POST", "/api/v1/projects"): {"id": "proj_9", "state": "active",
-                                       "min_contributors": 20},
-    }))
-    r = runner.invoke(
-        app,
-        ["--json", "--api-key-stdin", "projects", "create",
-         "--application", "allele_frequency_count@sha256:ab",
-         "--name", "Cohort", "--min-contributors", "20"],
-        input="k\n",
-    )
-    assert r.exit_code == 0, r.stdout
-    data = _json_out(r)
-    assert data["id"] == "proj_9"
-
-
-def test_applications_install_resolves_digest_by_bare_name(make_bundle, signing_keys):
-    """`blind applications install <name>` (no @digest) must resolve the newest
-    version's digest from the registry `show` payload. That payload mirrors
-    Application#to_api_hash, where the digest lives ONLY nested under
-    `versions[].digest` (newest first). Regression: the resolver used to read a
-    top-level `latest_digest`/`digest` the server never sends, so every bare-name
-    install failed with "Could not resolve a digest for <name>".
-    """
-    src, application_id = make_bundle(sign=True)
-    name, digest = application_id.split("@", 1)
-    route_digest = digest.removeprefix("sha256:")
-
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tf:
-        tf.add(
-            src,
-            arcname="bundle",
-            filter=lambda member: None if member.name.endswith("/.blind-signature") else member,
-        )
-    tar_bytes = buf.getvalue()
-    sig_bytes = (src / ".blind-signature").read_text().strip().encode()
-
-    # Deliberately NO top-level digest — force resolution through `versions`,
-    # exactly as the deployed registry serves it.
-    show_body = {
-        "slug": name,
-        "name": name,
-        "summary": "test app",
-        "versions": [
-            {
-                "version": 1,
-                "digest": digest,
-                "min_contributors": 20,
-                "allowed_runs_per_project": 5,
-                "aggregate_only": True,
-                "env_lock_digest": "x",
-                "signature": sig_bytes.decode(),
-                "published_at": None,
-            }
-        ],
-    }
-
-    ctxmod.set_test_transport(mock_transport({
-        ("GET", f"/api/v1/applications/{name}"): show_body,
-        ("GET", f"/api/v1/applications/{name}/versions/{route_digest}/bundle"):
-            lambda _request: httpx.Response(200, content=tar_bytes),
-        ("GET", f"/api/v1/applications/{name}/versions/{route_digest}/signature"):
-            lambda _request: httpx.Response(200, content=sig_bytes),
-    }))
-
-    r = runner.invoke(app, ["--json", "applications", "install", name])
-    assert r.exit_code == 0, r.stdout
-    data = _json_out(r)
-    assert data["digest"] == digest
-    assert data["digest_verified"] is True
-    assert data["signature_verified"] is True
-
-
 def test_applications_verify_exits_nonzero_on_tampered_signature(installed):
     """A scripted/CI caller gates on the EXIT CODE of `blind applications verify`;
     a tampered/unsigned bundle must exit 6, not just print a red row (issue #2)."""
@@ -477,3 +320,142 @@ def test_keys_retrieve_exits_nonzero_on_public_context_mismatch(installed):
                       input="k\n")
     assert r.exit_code == 6, r.stdout
     assert _json_out(r)["matches_server"] is False
+
+
+def test_login_with_api_key():
+    ctxmod.set_test_transport(mock_transport({
+        ("POST", "/api/v1/auth/token"): {"access_token": "tok_abc"},
+        ("GET", "/api/v1/me"): {"email": "researcher@example.test"},
+    }))
+    r = runner.invoke(app, ["--json", "login", "--api-key-stdin"], input="sk_test_123\n")
+    assert r.exit_code == 0, r.stdout
+    data = _json_out(r)
+    assert data["method"] == "api_key"
+    assert data["account"] == "researcher@example.test"
+
+
+def test_password_stdin_login_flow():
+    captured = {}
+
+    def exchange(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={
+            "access_token": "tok_password",
+            "account": {"email": "password@example.test"},
+        })
+
+    ctxmod.set_test_transport(mock_transport({
+        ("POST", "/api/v1/auth/token"): exchange,
+    }))
+    r = runner.invoke(
+        app,
+        ["--json", "login", "--email", "password@example.test", "--password-stdin"],
+        input="stdin-only-password  \n",
+    )
+    assert r.exit_code == 0, r.stdout
+    assert _json_out(r)["method"] == "password"
+    assert captured["password"] == "stdin-only-password  "
+
+
+def test_password_stdin_registration_flow():
+    captured = {}
+
+    def register(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(201, json={
+            "access_token": "tok_registered",
+            "account": {"email": "new@example.test"},
+        })
+
+    ctxmod.set_test_transport(mock_transport({
+        ("POST", "/api/v1/auth/registration"): register,
+    }))
+    r = runner.invoke(
+        app,
+        ["--json", "register", "--email", "new@example.test", "--password-stdin"],
+        input="stdin-only-password\n",
+    )
+    assert r.exit_code == 0, r.stdout
+    assert _json_out(r)["method"] == "register"
+    assert captured["password"] == "stdin-only-password"
+
+
+def test_explicit_password_login_flow():
+    captured = {}
+
+    def exchange(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={
+            "access_token": "tok_password",
+            "account": {"email": "password@example.test"},
+        })
+
+    ctxmod.set_test_transport(mock_transport({
+        ("POST", "/api/v1/auth/token"): exchange,
+    }))
+    r = runner.invoke(
+        app,
+        ["--json", "login", "--email", "password@example.test", "--password", "password"],
+    )
+    assert r.exit_code == 0, r.stdout
+    assert _json_out(r)["method"] == "password"
+    assert captured["password"] == "password"
+
+
+def test_explicit_password_registration_flow():
+    captured = {}
+
+    def register(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(201, json={
+            "access_token": "tok_registered",
+            "account": {"email": "new@example.test"},
+        })
+
+    ctxmod.set_test_transport(mock_transport({
+        ("POST", "/api/v1/auth/registration"): register,
+    }))
+    r = runner.invoke(
+        app,
+        ["--json", "register", "--email", "new@example.test", "--password", "password"],
+    )
+    assert r.exit_code == 0, r.stdout
+    assert _json_out(r)["method"] == "register"
+    assert captured["password"] == "password"
+
+
+def test_arbitrary_credential_file_flags_are_removed():
+    for flag in ("--api-key-file", "--password-file"):
+        r = runner.invoke(app, ["login", flag, "/tmp/must-not-be-read"])
+        assert r.exit_code == 2
+        assert "must-not-be-read" not in r.stdout
+
+
+def test_api_key_values_are_not_accepted_as_cli_arguments():
+    r = runner.invoke(app, ["login", "--api-key", "must-not-appear"])
+    assert r.exit_code == 2
+    assert "must-not-appear" not in r.stdout
+
+
+def test_stdin_credentials_reject_multiline_and_oversized_values():
+    for secret in ("first-line\nsecond-line\n", "x" * (16 * 1024 + 1)):
+        r = runner.invoke(app, ["login", "--api-key-stdin"], input=secret)
+        assert r.exit_code != 0
+        assert secret[:32] not in r.stdout
+
+
+def test_projects_create_cli():
+    ctxmod.set_test_transport(mock_transport({
+        ("POST", "/api/v1/projects"): {"id": "proj_9", "state": "active",
+                                       "min_contributors": 20},
+    }))
+    r = runner.invoke(
+        app,
+        ["--json", "--api-key-stdin", "projects", "create",
+         "--application", "allele_frequency_count@sha256:ab",
+         "--name", "Cohort", "--min-contributors", "20"],
+        input="k\n",
+    )
+    assert r.exit_code == 0, r.stdout
+    data = _json_out(r)
+    assert data["id"] == "proj_9"

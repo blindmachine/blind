@@ -33,7 +33,7 @@ from blind.runtime.compute import (
     run_encrypt_stage,
     run_keygen_stage,
 )
-from blind.store import Store
+from blind.store import LOCAL_DIGEST_SENTINEL, Store
 
 # The keygen stage writes these fixed filenames (standardized across every
 # shipped bundle — see 00_keygen.py). The secret context is BINARY (a serialized
@@ -59,14 +59,23 @@ def installed_bundle(store: Store, application_id: str) -> Bundle:
         raise VerificationError(
             f"Installed application name mismatch: {bundle.name!r} != {expected_name!r}"
         )
-    ensure_pinned_digest(application_id, bundle)
-    recorded_digest = bundle.root / ".digest"
-    if (
-        recorded_digest.is_symlink()
-        or not recorded_digest.is_file()
-        or recorded_digest.read_text().strip() != bundle.digest
-    ):
-        raise VerificationError("Installed application digest record is missing or invalid")
+    if expected_digest != LOCAL_DIGEST_SENTINEL:
+        # Real-digest (server/contribution/decrypt) path — fully hardened: pin the
+        # bundle to the caller-supplied external digest AND require the
+        # install-written `.digest` record to match the recomputed bundle digest.
+        ensure_pinned_digest(application_id, bundle)
+        recorded_digest = bundle.root / ".digest"
+        if (
+            recorded_digest.is_symlink()
+            or not recorded_digest.is_file()
+            or recorded_digest.read_text().strip() != bundle.digest
+        ):
+            raise VerificationError("Installed application digest record is missing or invalid")
+    # else: `<name>@local` is the unpinned local-bench/simulate sentinel. It has no
+    # external digest to pin and a cp'd bundle writes no `.digest` record, so those
+    # two checks don't apply. Its bytes are still fully signature-, structure-, and
+    # env-lock-verified below. This sentinel is never reachable from a
+    # server/contribution/decrypt input (those always carry a real sha256 digest).
     verify_signature(d)
     from blind.runtime.sealer import verify_env_lock
 

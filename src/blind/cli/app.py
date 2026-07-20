@@ -169,6 +169,7 @@ def login(
     ctx: typer.Context,
     api_key_stdin: bool = typer.Option(False, "--api-key-stdin", help="read an API key from stdin"),
     email: str = typer.Option(None, "--email", help="account email (password login)"),
+    password: str = typer.Option(None, "--password", help="account password"),
     password_stdin: bool = typer.Option(
         False, "--password-stdin", help="read the account password from stdin"),
 ):
@@ -180,15 +181,19 @@ def login(
     key = _read_secret_stdin("API key") if api_key_stdin else context.api_key
     if email and key:
         raise UsageError("Choose email/password login or API-key login, not both")
-    if password_stdin and not email:
-        raise UsageError("--password-stdin requires --email")
+    if (password is not None or password_stdin) and not email:
+        raise UsageError("--password and --password-stdin require --email")
+    if password is not None and password_stdin:
+        raise UsageError("Choose --password or --password-stdin, not both")
     if email:
-        password = (
-            _read_secret_stdin("Password")
-            if password_stdin
-            else _prompt_password(confirm=False)
-        )
-        result = login_with_password(client, email, password)
+        account_password = password
+        if account_password is None:
+            account_password = (
+                _read_secret_stdin("Password")
+                if password_stdin
+                else _prompt_password(confirm=False)
+            )
+        result = login_with_password(client, email, account_password)
     elif key:
         result = login_with_api_key(client, key)
     else:
@@ -203,6 +208,7 @@ def login(
 def register(
     ctx: typer.Context,
     email: str = typer.Option(..., "--email", help="the email to register"),
+    password: str = typer.Option(None, "--password", help="the password to register"),
     password_stdin: bool = typer.Option(
         False, "--password-stdin", help="read the password from stdin"),
 ):
@@ -212,11 +218,15 @@ def register(
     context: Context = ctx.obj
     from blind.login import register_with_password
 
-    pw = (
-        _read_secret_stdin("Password")
-        if password_stdin
-        else _prompt_password(confirm=True)
-    )
+    if password is not None and password_stdin:
+        raise UsageError("Choose --password or --password-stdin, not both")
+    pw = password
+    if pw is None:
+        pw = (
+            _read_secret_stdin("Password")
+            if password_stdin
+            else _prompt_password(confirm=True)
+        )
     result = register_with_password(context.client(token=None), email, pw)
     _persist_login(context, result)
 

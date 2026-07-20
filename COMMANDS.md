@@ -139,8 +139,8 @@ an account token — a contributor never needs a The Blind Machine account.
 
 | Command | Description | LOCAL/REMOTE | Key flags | Hashes |
 |---|---|---|---|---|
-| `blind register` | Create an account and store its token — the CLI is the full surface, so signup never requires the web app | REMOTE | `--email <e>`; hidden password prompt or `--password-stdin` | — |
-| `blind login` | Obtain and store an API token by email/password, API key, or device/browser code flow | REMOTE | `--email <e>` plus hidden prompt/`--password-stdin`; `--api-key-stdin`; `--profile` | — |
+| `blind register` | Create an account and store its token — the CLI is the full surface, so signup never requires the web app | REMOTE | `--email <e>`; hidden password prompt, `--password <p>`, or `--password-stdin` | — |
+| `blind login` | Obtain and store an API token by email/password, API key, or device/browser code flow | REMOTE | `--email <e>` plus hidden prompt, `--password <p>`, or `--password-stdin`; `--api-key-stdin`; `--profile` | — |
 | `blind logout` | Delete the stored token for the profile | LOCAL | `--profile` | — |
 | `blind config` | View or edit `~/.blind/config.yml` (api URL, active profile, output prefs, account) | LOCAL | `--list`, `--set k=v`, `--json` | — |
 | `blind doctor` | Verify Python, the **sandbox/container runtime** (`podman`/`docker`, `--network none` ok), the **`uv` env-sealer**, OS keychain, `cryptography` (Ed25519), `~/.blind` perms, a **sealed-env self-test** (newest installed application imports its own crypto), and API reachability | BOTH | `--json`, `--offline` (skip API ping) | — |
@@ -293,7 +293,7 @@ it is not already cached locally, but produces only a local artifact — run
 
 | Command | Description | LOCAL/REMOTE | Key flags | Hashes |
 |---|---|---|---|---|
-| `blind jobs estimate --project <id>` | Return the **marked-up CPU-second cost estimate** before running (no dispatch) | REMOTE | `--json` | prints `cohort commitment` (if frozen), estimated cost |
+| `blind jobs estimate --project <id>` | Return the **CPU-minute cost estimate** before running (no dispatch) | REMOTE | `--json` | prints `cohort commitment` (if frozen), estimated cost |
 | `blind jobs create --project <id>` | Request a compute run; **shows the cost estimate and confirms** before dispatch | REMOTE | `--yes` (skip confirm), `--json` | prints `job id`, pinned `application digest`, `cohort commitment`; requires frozen cohort + min-N |
 | `blind jobs list --project <id>` | List the project's jobs (state, cost, result digest) | REMOTE | `--state`, `--json` | prints each `result digest` (when done) |
 | `blind jobs retrieve <job>` | Job status (stage, cost, result digest when done) | REMOTE | `--json`, `--watch` | prints `result digest` when done |
@@ -553,7 +553,7 @@ browser twin of the same flow). All grants return `{ access_token, token_type, a
 ### `jobs`  (compute on ciphertext)
 | Method + path | CRUD/verb | Purpose | Used by |
 |---|---|---|---|
-| `POST /api/v1/projects/:id/jobs/estimate` | action | Return marked-up CPU-second cost estimate (no dispatch) | `jobs estimate` |
+| `POST /api/v1/projects/:id/jobs/estimate` | action | Return CPU-minute cost estimate (no dispatch) | `jobs estimate` |
 | `POST /api/v1/projects/:id/jobs` | create | Create + dispatch a compute job (requires frozen cohort + min-N + run cap) | `jobs create` |
 | `GET  /api/v1/projects/:id/jobs` | list | List the project's jobs | `jobs list` |
 | `GET  /api/v1/jobs/:id` | retrieve | Job status + result digest when done | `jobs retrieve` |

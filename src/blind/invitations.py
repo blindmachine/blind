@@ -3,7 +3,7 @@ public-context digest.
 
 A malicious hosted service can serve a public FHE context whose SECRET key the
 *service* holds, so contributors encrypt to the server's key instead of the
-legitimate keyholder's (paper §9.1.3). Auto-pinning the digest from the server's
+legitimate keyholder's (paper §7.2). Auto-pinning the digest from the server's
 own invitation packet defends against nothing — the server substitutes context and
 digest in lock-step.
 

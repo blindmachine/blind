@@ -26,6 +26,15 @@ from blind.errors import UsageError, VerificationError
 KEYRING_SERVICE = "blindmachine"
 DEFAULT_API = "https://blindmachine.org"
 
+# The `<name>@local` sentinel: an UNPINNED local bundle used ONLY by the
+# `bench`/`simulate` offline conventions (e.g. the paper's E1–E4 reproduction
+# harness copies a signed bundle to `<name>@local`). Its trust surface is its
+# OWN bytes — signature-, structure-, and env-lock-verified — but it carries no
+# EXTERNAL 64-hex digest to pin against. Server, contribution, and decrypt flows
+# NEVER use this sentinel: those inputs always carry a real sha256 digest, so
+# accepting `local` here cannot reopen the fail-open class.
+LOCAL_DIGEST_SENTINEL = "local"
+
 # Hosts allowed to speak cleartext http:// — only the local loopback (Rails dev
 # on http://localhost:PORT). Any other http:// host would leak the bearer token
 # on the wire.
@@ -255,8 +264,15 @@ class Store:
         if "@" in application_id:
             name, digest = application_id.split("@", 1)
             name = validate_component(name, "application name")
-            digest = validate_digest(digest, "application digest")
-            safe = f"{name}@{digest}"
+            if digest == LOCAL_DIGEST_SENTINEL:
+                # `<name>@local` is the local-bench/simulate sentinel: an unpinned
+                # bundle whose digest IS its own bytes, so there is no external
+                # 64-hex digest to validate. Server/contribution/decrypt flows
+                # always carry a real sha256 digest and go through the branch below.
+                safe = f"{name}@{LOCAL_DIGEST_SENTINEL}"
+            else:
+                digest = validate_digest(digest, "application digest")
+                safe = f"{name}@{digest}"
         else:
             safe = validate_component(application_id, "application name")
         return self._path("applications", safe)

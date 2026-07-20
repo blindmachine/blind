@@ -2,17 +2,34 @@
 
 > The machine can compute, but it cannot see.
 
-`blind` is the command-line trust surface for [The Blind Machine](https://blindmachine.org):
-a platform for **governed, content-addressed computation on encrypted data**. Data
-owners encrypt locally, the server computes on ciphertext only, and a researcher
-decrypts only the approved aggregate — with every application, cohort, and result
-independently verifiable by hash.
+Many scientific questions go unanswered because the data needed to answer them
+cannot be pooled. The records exist — five hospitals each hold a slice of a
+rare-disease cohort — and the answer is usually a plain summary over many
+individuals: how often a variant occurs, how many people carry it, the shape of a
+distribution. But the underlying data is sensitive and lives under separate
+private custody, so it never becomes one dataset, and the summary never gets
+computed.
+
+`blind` is the command-line client for [The Blind Machine](https://blindmachine.org),
+a platform that answers those questions without ever pooling the plaintext. Each
+data owner encrypts their slice **on their own machine** with homomorphic
+encryption; the server computes on **ciphertext only** and never learns the
+plaintext; the researcher decrypts just the one approved aggregate locally. Every
+application, cohort, and result is independently verifiable by hash, and every run
+emits a certificate a skeptic can re-check offline.
+
+![The Blind Machine at a glance — a trust boundary splits a LOCAL side (data owners encode and encrypt; the researcher holds the secret key and decrypts) from the SERVER side, which sees only the public key and ciphertext and computes without ever decrypting.](docs/overview.png)
 
 **Every operation that touches plaintext or a secret key happens on your
 machine, in this CLI.** The server never runs keygen, encoding, encryption, or
 decryption. It sees ciphertext plus a public context, and nothing else. That is
 the whole point of shipping the trust surface as an auditable, open-source
-program you can read before you run.
+program you can read before you run — Kerckhoffs's principle as a product: no
+guarantee rests on the secrecy or the honesty of the server.
+
+The design, threat model, and ten reproducible experiments are written up in the
+paper, archived on Zenodo with a citable DOI:
+**[https://doi.org/10.5281/zenodo.21421426](https://doi.org/10.5281/zenodo.21421426)**.
 
 - v1 demo: `allele_frequency_count` — sum encrypted variant-presence vectors
   across ≥20 contributors, decrypt only the per-variant count.
@@ -115,23 +132,26 @@ size-bounded output files writable, so a runtime must be present. Application cr
 the curated set) is **not** a `blind` dependency; each application's `env/uv.lock`
 fetches its own pinned deps at install time.
 
-Run the CLI directly in an isolated, cached environment:
+Install the CLI as the `blind` command:
+
+```bash
+uv tool install blindmachine
+```
+
+`uv tool install` downloads the `blindmachine` package from PyPI, installs its
+exactly pinned runtime closure into an isolated environment, and puts two
+equivalent executables on your PATH: `blind` (the name every example in these
+docs uses) and `blindmachine`.
+
+To try it once without installing anything, run it in an ephemeral, cached
+environment instead — note that `uvx` alone puts nothing on your PATH:
 
 ```bash
 uvx blindmachine
 ```
 
-`uvx` downloads the `blindmachine` package from PyPI, installs its exactly
-pinned runtime closure into uv's cache, and runs the `blindmachine` entry point.
 Nothing separate is published to "uvx": publishing `blindmachine` on PyPI makes
-this command available.
-
-For a persistent `blind` command instead:
-
-```bash
-uv tool install blindmachine
-blind doctor
-```
+both commands available.
 
 Then check your toolchain:
 
@@ -146,7 +166,7 @@ blind doctor          # verifies python, the sandbox runtime, the uv env-sealer,
 The runtime uses Typer/Rich for its command surface, HTTPX/Pydantic for the API
 contract, keyring for OS-backed secrets, and cryptography for pinned Ed25519
 verification. Every direct and transitive Python dependency is exact-pinned in
-wheel metadata because `uvx` does not consume this repository's `uv.lock`; the
+wheel metadata because `uv tool install`/`uvx` do not consume this repository's `uv.lock`; the
 release gate proves that metadata and the lock export have the same runtime
 closure. A container runtime (`podman`/`docker`) is required but external.
 Application crypto is isolated per application and installed only from its
@@ -181,11 +201,12 @@ blind certificates verify <cert-hash>                    # LOCAL: recompute + ch
 ### Data owner (no account)
 
 ```bash
-uvx blindmachine contributions create \
+blind contributions create \
   --link https://blindmachine.org/c/AbC123... \
   --data ./my_vector.csv
 # encode → encrypt happen LOCALLY; only ciphertext is uploaded.
 # raw + encoded stay local; no secret key is generated here (uses the project's public context).
+# one-off, nothing installed: `uvx blindmachine contributions create ...` works too.
 ```
 
 Simulate feasibility before any real contributor exists (`simulate` is an alias

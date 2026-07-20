@@ -39,15 +39,17 @@
 #
 #  Usage
 #  ─────
+#      python examples/register_and_run.py                 # run against https://blindmachine.org
 #      python examples/register_and_run.py --local         # boot a local worker-enabled server + run
 #      python examples/register_and_run.py --server https://staging.example.com --allow-remote
 #      python examples/register_and_run.py --local --fast  # no pauses (good for recording)
 #
-#  Requirements: Python 3.11+, `uv` (the CLI runs under `uv run blind`). A target is
-#  always explicit. `--local` boots the monorepo's demo/bootstrap_server.sh; a remote
-#  server additionally requires `--allow-remote`, and production requires the separate
-#  `--allow-production` confirmation. Any target must have open registration and a
-#  live compute worker.
+#  Requirements: Python 3.11+, `uv` (the CLI runs under `uv run blind`). With no
+#  target, the demo runs against production (https://blindmachine.org). `--local`
+#  boots the monorepo's demo/bootstrap_server.sh; an explicit non-production
+#  `--server` requires `--allow-remote`, and an explicit production `--server`
+#  additionally requires `--allow-production`. Any target must have open
+#  registration and a live compute worker.
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -223,6 +225,12 @@ def blind(
     env = {
         **os.environ,
         "HOME": home,
+        # Each role lives in a throwaway $HOME, so the OS keychain (which is
+        # per-OS-user, not per-$HOME) is the wrong place for these demo keys:
+        # four roles would collide in one keychain and re-runs would leave
+        # orphaned entries behind. The CLI's explicit escape hatch stores them
+        # as 0600 files inside the role's own temp ~/.blind instead.
+        "BLIND_SECRET_BACKEND": "file",
     }
     # Only override the bundle-verification key when the caller explicitly asked
     # for one. By default the CLI uses its built-in trust anchor, which is what
@@ -258,19 +266,19 @@ def ensure_account_cli(home: str, email: str, password: str, *, api: str, signin
     """Create the account — or, on a re-run against a persisted DB, sign it in —
     entirely through the CLI (`blind register` / `blind login --email`), storing the
     bearer token in this role's isolated ~/.blind. No web app, no API keys to scrape.
-    Login-first keeps re-runs off the signup throttle; prints the (password-masked)
+    Login-first keeps re-runs off the signup throttle; prints the complete example
     command that actually ran + a ✓, and returns the human status."""
     pathlib.Path(home).mkdir(parents=True, exist_ok=True, mode=0o700)
-    kw = dict(api=api, signing_key=signing_key, capture=True, secret_input=password + "\n")
+    kw = dict(api=api, signing_key=signing_key, capture=True)
     login = blind(
-        home, "login", "--email", email, "--password-stdin", check=False, **kw,
+        home, "login", "--email", email, "--password", password, check=False, **kw,
     )
     if login and login.get("account"):
-        print(_c(CMD, f"$ blind login --email {email} --password-stdin"))
+        print(_c(CMD, f"$ blind login --email {email} --password {password}"))
         ok(f"{email:<26} already registered → signed in")
         return "signed in"
-    print(_c(CMD, f"$ blind register --email {email} --password-stdin"))
-    blind(home, "register", "--email", email, "--password-stdin", **kw)
+    print(_c(CMD, f"$ blind register --email {email} --password {password}"))
+    blind(home, "register", "--email", email, "--password", password, **kw)
     ok(f"{email:<26} registered")
     return "registered"
 
@@ -385,8 +393,9 @@ def main(argv: list[str] | None = None) -> int:
         description="Register real users and run the full Blind Machine loop via the CLI.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    target = ap.add_mutually_exclusive_group(required=True)
-    target.add_argument("--server", help="target an explicit Blind Machine server origin")
+    target = ap.add_mutually_exclusive_group()
+    target.add_argument("--server", help="target an explicit Blind Machine server origin "
+                                         f"(default: https://{PRODUCTION_HOST})")
     target.add_argument("--local", action="store_true",
                         help="boot the monorepo's local worker-enabled server")
     ap.add_argument("--allow-remote", action="store_true",
@@ -431,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
     owner_emails = [
         f"dataowner{k}+{run_id}@{args.email_domain}" for k in range(1, args.owners + 1)
     ]
-    demo_password = secrets.token_urlsafe(32)
+    demo_password = "password"
     note(f"{researcher_email} opens the study; {args.owners} unique data-owner accounts contribute.")
     note("Every step below is a real `blind` command against a real server.")
 
@@ -447,11 +456,18 @@ def main(argv: list[str] | None = None) -> int:
         digest = facts.get("DEMO_DIGEST") or None
         ok(f"local server ready at {server}")
     else:
-        server = validate_server_target(
-            args.server, allow_remote=args.allow_remote, allow_production=args.allow_production
-        )
+        # No target given → production. The default carries its own consent
+        # (running the demo with no flags IS the ask); an explicit --server
+        # still requires the --allow-remote / --allow-production opt-ins.
+        if args.server is None:
+            server = f"https://{PRODUCTION_HOST}"
+            note(f"No --server given — defaulting to production: {server}")
+        else:
+            server = validate_server_target(
+                args.server, allow_remote=args.allow_remote, allow_production=args.allow_production
+            )
+            note(f"Target server: {server}")
         digest = None
-        note(f"Target server: {server}")
     if not server:
         die("could not resolve a server URL")
 

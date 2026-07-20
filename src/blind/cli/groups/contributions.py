@@ -71,7 +71,7 @@ def _fetch_public_context(
 ) -> tuple[Path, str]:
     """Return (local path to the project's public context, provenance) — fetching +
     caching it from the server if we don't already hold it. Provenance is one of
-    ``signed`` / ``pinned`` / ``unpinned``.
+    ``signed`` / ``pinned`` / ``local``.
 
     Key-substitution defense (RFC 0003): a contributor encrypts under the public
     context the SERVER serves. A malicious server could serve *its own* public
